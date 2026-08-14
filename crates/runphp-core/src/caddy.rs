@@ -143,20 +143,25 @@ pub async fn stop(cfg: &AppConfig) -> Result<()> {
     Ok(())
 }
 
-/// 通过 admin API 热重载配置（不中断连接）。
-pub async fn reload() -> Result<()> {
-    let url = "http://127.0.0.1:2019/load";
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(url)
-        .header("Content-Type", "application/json")
-        .send()
+/// 通过子进程 `frankenphp reload --config` 热重载配置（不中断连接）。
+///
+/// 相比直接调用 admin API `/load`，子进程方式会自动完成
+/// Caddyfile → JSON 适配，更可靠。
+pub async fn reload(cfg: &AppConfig, binary: &std::path::Path) -> Result<()> {
+    let caddyfile = cfg.caddyfile_path();
+    let output = tokio::process::Command::new(binary)
+        .arg("reload")
+        .arg("--config")
+        .arg(&caddyfile)
+        .output()
         .await
-        .map_err(|e| Error::Caddy(format!("热重载请求失败: {e}")))?;
-    if !resp.status().is_success() {
+        .map_err(|e| Error::Caddy(format!("执行 reload 命令失败: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(Error::Caddy(format!(
-            "热重载失败: HTTP {}",
-            resp.status()
+            "热重载失败: {}",
+            stderr.trim()
         )));
     }
     Ok(())

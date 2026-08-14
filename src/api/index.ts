@@ -25,10 +25,52 @@ export async function call<T>(cmd: string, args: Record<string, unknown> = {}): 
   return res.json();
 }
 
-// ---- 具体接口（M1 骨架，后续随 core 能力扩展） ----
+// ---- 类型定义（与 Rust 端 serde 序列化对齐） ----
 
-/** 示例：问候（M1 验证用）。 */
-export const greet = (name: string) => call<string>("greet", { name });
+export interface WorkerConfig {
+  script: string;
+  num: number;
+}
+
+export interface Site {
+  id: string;
+  name: string;
+  domains: string[];
+  port: number;
+  root: string;
+  https: boolean;
+  worker: WorkerConfig | null;
+  runtime_version: string;
+  php_ini: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RuntimeInfo {
+  version: string;
+  path: string;
+  is_default: boolean;
+}
+
+// ---- 具体接口 ----
 
 /** 获取数据目录。 */
 export const getDataDir = () => call<string>("data_dir");
+
+// 运行时
+export const runtimeList = () => call<RuntimeInfo[]>("runtime_list");
+export const runtimeInstall = (version: string) =>
+  call<string>("runtime_install", { version });
+export const runtimeStart = () => call<number>("runtime_start");
+export const runtimeStop = () => call<void>("runtime_stop");
+export const runtimeReload = () => call<void>("runtime_reload");
+export const runtimeStatus = () => call<boolean>("runtime_status");
+
+// 站点
+export const siteList = () => call<Site[]>("site_list");
+export const siteAdd = (site: Site) => call<void>("site_add", { site });
+export const siteUpdate = (site: Site) => call<void>("site_update", { site });
+export const siteRemove = (id: string) => call<void>("site_remove", { id });
+
+// 示例（M1 骨架验证用）
+export const greet = (name: string) => call<string>("greet", { name });

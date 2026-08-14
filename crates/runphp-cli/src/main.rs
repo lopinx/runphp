@@ -37,6 +37,8 @@ enum Command {
     Run,
     /// 停止运行中的 FrankenPHP
     Stop,
+    /// 热重载配置（不中断连接）
+    Reload,
     /// 查询运行状态
     Status,
 }
@@ -230,6 +232,30 @@ async fn main() {
                 println!("运行中");
             } else {
                 println!("未运行");
+            }
+        }
+        Command::Reload => {
+            // 先重新生成 Caddyfile，再热重载
+            let reg = cfg.load_sites().unwrap_or_default();
+            if let Err(e) = caddy::write_caddyfile(&cfg, &reg.sites) {
+                eprintln!("生成 Caddyfile 失败: {e}");
+                std::process::exit(1);
+            }
+            let mgr = RuntimeManager::new(cfg.clone());
+            let rt = match mgr.resolve(None) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            };
+            match caddy::reload(&cfg, &rt.path).await {
+                Ok(()) => println!("热重载成功。"),
+                Err(e) => {
+                    eprintln!("热重载失败: {e}");
+                    eprintln!("请确认 FrankenPHP 正在运行（runphp status）。");
+                    std::process::exit(1);
+                }
             }
         }
     }
