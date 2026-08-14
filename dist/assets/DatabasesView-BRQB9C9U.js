@@ -1,1 +1,0 @@
-import{d as n,c as o,a as t,b as a}from"./index-CNZNbpqL.js";const _=n({__name:"DatabasesView",setup(s){return(c,p)=>{const e=t("n-empty");return a(),o(e,{description:"数据库管理功能开发中（M5 里程碑）"})}}});export{_ as default};
