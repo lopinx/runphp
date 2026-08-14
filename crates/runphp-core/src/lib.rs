@@ -2,11 +2,16 @@
 //!
 //! 桌面端（Tauri）、命令行（runphp-cli）、Web 面板三端共用本库。
 
+pub mod caddy;
 pub mod config;
 pub mod error;
+pub mod runtime;
+pub mod site;
 
 pub use config::AppConfig;
 pub use error::Error;
+pub use runtime::RuntimeManager;
+pub use site::{Site, SiteRegistry};
 
 /// 核心库统一结果类型。
 pub type Result<T> = std::result::Result<T, Error>;

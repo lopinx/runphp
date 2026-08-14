@@ -16,3 +16,9 @@ reqwest = { workspace = true }
 dirs = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+# 下载校验与 Windows zip 解压
+sha2 = "0.10"
+zip = { version = "4", default-features = false, features = ["deflate"] }
+# Linux 可执行位设置
+libc = "0.2"
+futures-util = "0.3"
