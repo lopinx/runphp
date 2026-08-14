@@ -1,11 +1,14 @@
 //! 应用配置与状态持久化（数据目录下 JSON 文件）。
 
-use crate::{Error, Result};
+use crate::{site::SiteRegistry, Error, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// 配置文件在数据目录下的相对位置。
 const CONFIG_FILE: &str = "config.json";
+
+/// 站点注册表文件名。
+const SITES_FILE: &str = "sites.json";
 
 /// 应用全局配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,6 +74,31 @@ impl AppConfig {
     /// 生成的 Caddyfile 路径。
     pub fn caddyfile_path(&self) -> PathBuf {
         self.data_dir.join("Caddyfile")
+    }
+
+    /// 站点注册表文件路径。
+    pub fn sites_file_path(&self) -> PathBuf {
+        self.data_dir.join(SITES_FILE)
+    }
+
+    /// 加载站点注册表；不存在时返回空。
+    pub fn load_sites(&self) -> Result<SiteRegistry> {
+        let path = self.sites_file_path();
+        if !path.exists() {
+            return Ok(SiteRegistry::default());
+        }
+        let raw = std::fs::read_to_string(&path)?;
+        let reg: SiteRegistry = serde_json::from_str(&raw)
+            .map_err(|e| Error::Config(format!("站点注册表解析失败: {e}")))?;
+        Ok(reg)
+    }
+
+    /// 保存站点注册表。
+    pub fn save_sites(&self, reg: &SiteRegistry) -> Result<()> {
+        std::fs::create_dir_all(&self.data_dir)?;
+        let raw = serde_json::to_string_pretty(reg)?;
+        std::fs::write(self.sites_file_path(), raw)?;
+        Ok(())
     }
 }
 

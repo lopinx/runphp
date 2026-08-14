@@ -15,6 +15,15 @@ pub enum Error {
     #[error("配置错误: {0}")]
     Config(String),
 
+    #[error("运行时错误: {0}")]
+    Runtime(String),
+
+    #[error("Caddy/FrankenPHP 错误: {0}")]
+    Caddy(String),
+
+    #[error("解压错误: {0}")]
+    Zip(#[from] zip::result::ZipError),
+
     #[error("{0}")]
     Other(String),
 }

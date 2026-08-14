@@ -22,6 +22,7 @@ tauri = { version = "2", features = [] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+tokio = { workspace = true }
 
 [features]
 # Tauri 脚手架约定：发布构建启用自定义协议
