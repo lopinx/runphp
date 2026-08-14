@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { useAppStore } from "../stores/app";
-import { isDesktop } from "../api";
+import { isDesktop, logsRead } from "../api";
 
 const store = useAppStore();
 const dataDir = ref("");
 const starting = ref(false);
+const logText = ref("");
 
 async function load() {
   store.loading = true;
@@ -14,10 +15,19 @@ async function load() {
     await store.refreshStatus();
     const { getDataDir } = await import("../api");
     dataDir.value = await getDataDir();
+    await refreshLogs();
   } catch (e) {
     console.error("加载仪表盘失败", e);
   } finally {
     store.loading = false;
+  }
+}
+
+async function refreshLogs() {
+  try {
+    logText.value = await logsRead(100);
+  } catch (e) {
+    logText.value = `加载日志失败：${e}`;
   }
 }
 
@@ -91,6 +101,15 @@ import { computed } from "vue";
       </n-space>
     </n-card>
 
+    <n-card title="运行时日志（最近 100 行）">
+      <template #header-extra>
+        <n-button size="small" @click="refreshLogs">刷新</n-button>
+      </template>
+      <n-scrollbar style="max-height: 300px">
+        <pre class="log-view">{{ logText || "日志为空或尚未启动。" }}</pre>
+      </n-scrollbar>
+    </n-card>
+
     <n-card title="运行时详情">
       <n-descriptions :column="1" label-placement="left" bordered>
         <n-descriptions-item label="运行模式">
@@ -119,3 +138,13 @@ import { computed } from "vue";
     </n-alert>
   </n-space>
 </template>
+
+<style scoped>
+.log-view {
+  margin: 0;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+</style>

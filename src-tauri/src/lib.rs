@@ -141,6 +141,25 @@ async fn runtime_status() -> bool {
     caddy::status().await
 }
 
+/// 设置默认运行时版本。
+#[tauri::command]
+fn runtime_set_default(version: String) -> Result<(), String> {
+    let mut cfg = cfg();
+    let mgr = RuntimeManager::new(cfg.clone());
+    if !mgr.list_installed().iter().any(|r| r.version == version) {
+        return Err(format!("运行时 {version} 未安装"));
+    }
+    cfg.default_runtime_version = version;
+    cfg.save().map_err(|e| e.to_string())
+}
+
+/// 读取运行时日志末尾若干行。
+#[tauri::command]
+fn logs_read(lines: Option<usize>) -> Result<String, String> {
+    let cfg = cfg();
+    caddy::read_log(&cfg, lines.unwrap_or(200)).map_err(|e| e.to_string())
+}
+
 // ---- Hosts 管理 ----
 
 /// 列出受管区块内的 hosts 条目。
@@ -278,6 +297,8 @@ pub fn run() {
             runtime_stop,
             runtime_reload,
             runtime_status,
+            runtime_set_default,
+            logs_read,
             site_list,
             site_add,
             site_update,

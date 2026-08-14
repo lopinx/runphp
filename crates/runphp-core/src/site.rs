@@ -33,8 +33,6 @@ pub struct Site {
     pub https: bool,
     /// Worker 模式配置（None 则用普通 php_server）。
     pub worker: Option<WorkerConfig>,
-    /// 绑定的运行时版本（空字符串表示用默认）。
-    pub runtime_version: String,
     /// PHP ini 覆盖指令，每行一条如 `memory_limit = 256M`。
     pub php_ini: Vec<String>,
     /// 创建时间（RFC3339）。
@@ -55,7 +53,6 @@ impl Site {
             root,
             https: false,
             worker: None,
-            runtime_version: String::new(),
             php_ini: Vec::new(),
             created_at: now.clone(),
             updated_at: now,

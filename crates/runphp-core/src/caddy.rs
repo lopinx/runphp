@@ -167,6 +167,18 @@ pub async fn reload(cfg: &AppConfig, binary: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+/// 读取运行时日志末尾若干行（供仪表盘/日志页展示）。
+pub fn read_log(cfg: &AppConfig, tail_lines: usize) -> Result<String> {
+    let log_path = cfg.logs_dir().join("frankenphp.log");
+    if !log_path.exists() {
+        return Ok(String::new());
+    }
+    let content = std::fs::read_to_string(&log_path)?;
+    let lines: Vec<&str> = content.lines().collect();
+    let start = lines.len().saturating_sub(tail_lines);
+    Ok(lines[start..].join("\n"))
+}
+
 /// 查询运行状态（admin API 可达即视为运行中）。
 pub async fn status() -> bool {
     reqwest::Client::new()

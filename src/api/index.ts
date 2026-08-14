@@ -40,7 +40,6 @@ export interface Site {
   root: string;
   https: boolean;
   worker: WorkerConfig | null;
-  runtime_version: string;
   php_ini: string[];
   created_at: string;
   updated_at: string;
@@ -65,6 +64,10 @@ export const runtimeStart = () => call<number>("runtime_start");
 export const runtimeStop = () => call<void>("runtime_stop");
 export const runtimeReload = () => call<void>("runtime_reload");
 export const runtimeStatus = () => call<boolean>("runtime_status");
+export const runtimeSetDefault = (version: string) =>
+  call<void>("runtime_set_default", { version });
+export const logsRead = (lines?: number) =>
+  call<string>("logs_read", { lines: lines ?? 200 });
 
 // 站点
 export const siteList = () => call<Site[]>("site_list");

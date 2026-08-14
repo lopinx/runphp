@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { h, onMounted, ref } from "vue";
 import { useAppStore } from "../stores/app";
-import { useMessage } from "naive-ui";
+import { NButton, useMessage } from "naive-ui";
 import { listen } from "@tauri-apps/api/event";
-import { isDesktop } from "../api";
+import { isDesktop, runtimeSetDefault } from "../api";
 
 const store = useAppStore();
 const message = useMessage();
@@ -30,6 +30,16 @@ onMounted(async () => {
     }
   }
 });
+
+async function setDefault(version: string) {
+  try {
+    await runtimeSetDefault(version);
+    message.success(`已将默认运行时设置为 v${version}`);
+    await store.refreshRuntimes();
+  } catch (e) {
+    message.error(`设置失败：${e}`);
+  }
+}
 
 async function install() {
   if (!installVersion.value.trim()) {
@@ -61,6 +71,18 @@ async function install() {
               title: '默认',
               key: 'is_default',
               render: (row: any) => (row.is_default ? '✅' : ''),
+            },
+            {
+              title: '操作',
+              key: 'actions',
+              render: (row: any) =>
+                row.is_default
+                  ? null
+                  : h(
+                      NButton,
+                      { size: 'small', onClick: () => setDefault(row.version) },
+                      () => '设为默认',
+                    ),
             },
           ]"
           :data="store.runtimes"

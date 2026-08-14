@@ -86,7 +86,6 @@ async function save() {
     root: formRoot.value.trim(),
     https: formHttps.value,
     worker,
-    runtime_version: editing.value?.runtime_version ?? "",
     php_ini: editing.value?.php_ini ?? [],
     created_at: editing.value?.created_at ?? new Date().toISOString(),
     updated_at: new Date().toISOString(),

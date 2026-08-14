@@ -1,7 +1,7 @@
 //! RunPHP 命令行入口。
 //!
-//! 提供运行时管理、站点管理、启动停止等子命令，供无头 Linux 模式使用。
-//! M2 阶段实现 runtime / site / run 三类命令。
+//! 提供运行时管理、站点管理、hosts 管理、启动停止等子命令，
+//! 以及内建 Web 管理面板，供无头 Linux 服务器使用。
 
 mod panel;
 
@@ -48,6 +48,12 @@ enum Command {
     Reload,
     /// 查询运行状态
     Status,
+    /// 显示运行时日志末尾
+    Logs {
+        /// 显示行数
+        #[arg(long, default_value = "100")]
+        lines: usize,
+    },
     /// 启动 Web 管理面板
     Panel {
         /// 监听端口
@@ -70,6 +76,8 @@ enum RuntimeCmd {
     List,
     /// 下载并安装指定版本
     Install { version: String },
+    /// 设置默认运行时版本
+    Default { version: String },
 }
 
 #[derive(Subcommand)]
@@ -138,6 +146,22 @@ async fn main() {
                     for rt in installed {
                         let mark = if rt.is_default { "*" } else { " " };
                         println!("{} {}: {}", mark, rt.version, rt.path.display());
+                    }
+                }
+            }
+            RuntimeCmd::Default { version } => {
+                let mgr = RuntimeManager::new(cfg.clone());
+                if !mgr.list_installed().iter().any(|r| r.version == version) {
+                    eprintln!("运行时 {version} 未安装");
+                    std::process::exit(1);
+                }
+                let mut new_cfg = cfg.clone();
+                new_cfg.default_runtime_version = version.clone();
+                match new_cfg.save() {
+                    Ok(()) => println!("已将默认运行时设置为 {version}。"),
+                    Err(e) => {
+                        eprintln!("保存失败: {e}");
+                        std::process::exit(1);
                     }
                 }
             }
@@ -313,6 +337,14 @@ async fn main() {
                 println!("未运行");
             }
         }
+        Command::Logs { lines } => match caddy::read_log(&cfg, lines) {
+            Ok(t) if t.is_empty() => println!("日志为空或尚未启动。"),
+            Ok(t) => println!("{t}"),
+            Err(e) => {
+                eprintln!("读取日志失败: {e}");
+                std::process::exit(1);
+            }
+        },
         Command::Reload => {
             // 先重新生成 Caddyfile，再热重载
             let reg = cfg.load_sites().unwrap_or_default();

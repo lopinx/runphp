@@ -103,6 +103,7 @@ cargo build -p runphp-cli --release
 | `runphp version` | 显示版本 |
 | `runphp runtime list` | 列出已安装运行时 |
 | `runphp runtime install <版本>` | 下载安装指定版本 |
+| `runphp runtime default <版本>` | 设置默认运行时版本 |
 | `runphp site list` | 列出全部站点 |
 | `runphp site add <名称> --domain <域名> --root <目录> [--https]` | 新建站点 |
 | `runphp site rm <id>` | 删除站点 |
@@ -110,6 +111,7 @@ cargo build -p runphp-cli --release
 | `runphp stop` | 停止服务 |
 | `runphp reload` | 热重载配置 |
 | `runphp status` | 查询运行状态 |
+| `runphp logs [--lines <行数>]` | 查看运行时日志末尾（默认 100 行） |
 | `runphp hosts list` | 列出受管 hosts 条目 |
 | `runphp hosts sync` | 同步站点域名到 hosts |
 | `runphp hosts elevation` | 显示提权命令 |

@@ -52,6 +52,8 @@ pub async fn serve(
         .route("/runtime_stop", post(runtime_stop))
         .route("/runtime_reload", post(runtime_reload))
         .route("/runtime_status", post(runtime_status))
+        .route("/runtime_set_default", post(runtime_set_default))
+        .route("/logs_read", post(logs_read))
         .route("/site_list", post(site_list))
         .route("/site_add", post(site_add))
         .route("/site_update", post(site_update))
@@ -274,6 +276,35 @@ async fn runtime_status() -> Json<Value> {
     Json(json!(caddy::status().await))
 }
 
+async fn runtime_set_default(State(s): S, Json(req): Json<VersionReq>) -> Response {
+    let mgr = RuntimeManager::new(s.cfg.clone());
+    if !mgr.list_installed().iter().any(|r| r.version == req.version) {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("运行时 {} 未安装", req.version),
+        )
+            .into_response();
+    }
+    let mut cfg = s.cfg.clone();
+    cfg.default_runtime_version = req.version;
+    match cfg.save() {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn logs_read(State(s): S, Json(req): Json<Value>) -> Response {
+    let lines = req
+        .get("lines")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .unwrap_or(200);
+    match caddy::read_log(&s.cfg, lines) {
+        Ok(t) => Json(json!(t)).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
 async fn site_list(State(s): S) -> Json<Value> {
     let reg = s.cfg.load_sites().unwrap_or_default();
     Json(json!(reg.sites))
@@ -429,8 +460,8 @@ async fn db_remote_remove(State(s): S, Json(req): Json<IdReq>) -> Response {
     }
 }
 
-async fn db_remote_test(Json(profile): Json<ConnectionProfile>) -> Response {
-    match RemoteDbManager::test_connection(&profile).await {
+async fn db_remote_test(State(_): State<Arc<PanelState>>, Json(req): Json<ProfileReq>) -> Response {
+    match RemoteDbManager::test_connection(&req.profile).await {
         Ok(msg) => Json(json!(msg)).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     }
