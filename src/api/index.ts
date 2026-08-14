@@ -137,6 +137,3 @@ export const dbRemoteRemove = (id: string) =>
   call<void>("db_remote_remove", { id });
 export const dbRemoteTest = (profile: ConnectionProfile) =>
   call<string>("db_remote_test", { profile });
-
-// 示例（M1 骨架验证用）
-export const greet = (name: string) => call<string>("greet", { name });

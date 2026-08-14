@@ -87,7 +87,18 @@ impl SqliteManager {
 
     /// 删除数据库文件。
     pub fn delete_database(&self, name: &str) -> Result<(), Error> {
-        let path = self.dir.join(name);
+        let safe_name = sanitize_name(name);
+        // 尝试带 .db 和不带后缀两种形式
+        let path_with_ext = self.dir.join(format!("{safe_name}.db"));
+        let path_plain = self.dir.join(&safe_name);
+        let path = if path_with_ext.exists() {
+            path_with_ext
+        } else if path_plain.exists() {
+            path_plain
+        } else {
+            // 直接用原始名称尝试（兼容旧逻辑）
+            self.dir.join(name)
+        };
         if path.exists() {
             std::fs::remove_file(&path).map_err(Error::Io)?;
         }
@@ -95,12 +106,21 @@ impl SqliteManager {
     }
 
     /// 打开指定数据库连接。
+    ///
+    /// 仅允许访问管理器目录内的数据库文件，防止路径穿越。
     fn connect(&self, name: &str) -> Result<Connection, Error> {
-        let path = if Path::new(name).is_absolute() {
-            PathBuf::from(name)
-        } else {
-            self.dir.join(name)
-        };
+        // 拒绝绝对路径和路径穿越
+        if Path::new(name).is_absolute() {
+            return Err(Error::Other("不允许使用绝对路径访问数据库".into()));
+        }
+        if name.contains("..") {
+            return Err(Error::Other("数据库名称不允许包含 '..'".into()));
+        }
+        let path = self.dir.join(name);
+        // 确保最终路径仍在管理目录下
+        if !path.starts_with(&self.dir) {
+            return Err(Error::Other("数据库路径越权".into()));
+        }
         Connection::open(&path).map_err(rusqlite_err)
     }
 
@@ -118,9 +138,10 @@ impl SqliteManager {
 
         let mut tables = Vec::new();
         for name in names {
+            let escaped = escape_ident(&name);
             let col_count: i64 = conn
                 .query_row(
-                    &format!("SELECT count(*) FROM pragma_table_info('{name}')"),
+                    &format!("SELECT count(*) FROM pragma_table_info('{escaped}')"),
                     [],
                     |r| r.get(0),
                 )
@@ -128,7 +149,7 @@ impl SqliteManager {
             let row_count: i64 = if name == "sqlite_sequence" {
                 0
             } else {
-                conn.query_row(&format!("SELECT count(*) FROM '{name}'"), [], |r| {
+                conn.query_row(&format!("SELECT count(*) FROM '{escaped}'"), [], |r| {
                     r.get(0)
                 })
                 .unwrap_or(0)
@@ -144,7 +165,8 @@ impl SqliteManager {
 
     /// 查询表中的前 N 行数据。
     pub fn query_table(&self, db: &str, table: &str, limit: i64, offset: i64) -> Result<QueryResult, Error> {
-        let sql = format!("SELECT * FROM '{table}' LIMIT {limit} OFFSET {offset}");
+        let escaped_table = escape_ident(table);
+        let sql = format!("SELECT * FROM '{escaped_table}' LIMIT {limit} OFFSET {offset}");
         self.execute(&db, &sql)
     }
 
@@ -212,6 +234,12 @@ fn rusqlite_err(e: rusqlite::Error) -> Error {
 /// 清理数据库名称，防止路径穿越。
 fn sanitize_name(name: &str) -> String {
     name.replace(['/', '\\', '.', ' ', ':'], "_")
+}
+
+/// 转义 SQL 标识符（表名/列名），防止标识符注入。
+/// 将内部的单引号翻倍（SQLite 标准转义）。
+fn escape_ident(name: &str) -> String {
+    name.replace('\'', "''")
 }
 
 #[cfg(test)]

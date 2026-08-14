@@ -249,8 +249,9 @@ pub fn entries_from_sites(sites: &[crate::site::Site]) -> Vec<HostEntry> {
             });
         }
     }
-    // 去重
-    entries.dedup();
+    // 去重：使用 sort + dedup 确保全局去重（dedup 仅去相邻重复）
+    entries.sort_by(|a, b| a.host.cmp(&b.host));
+    entries.dedup_by(|a, b| a.host == b.host);
     entries
 }
 
