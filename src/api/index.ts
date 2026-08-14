@@ -84,5 +84,59 @@ export const hostsSync = () => call<number>("hosts_sync");
 export const hostsContent = () => call<string>("hosts_content");
 export const hostsElevation = () => call<string>("hosts_elevation");
 
+// 数据库
+export interface DatabaseFile {
+  name: string;
+  path: string;
+  size: number;
+}
+export interface TableInfo {
+  name: string;
+  column_count: number;
+  row_count: number;
+}
+export interface QueryResult {
+  columns: string[];
+  rows: any[][];
+  affected: number;
+}
+export type DbDriver = "mysql" | "postgres";
+export interface ConnectionProfile {
+  id: string;
+  name: string;
+  driver: DbDriver;
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  database: string | null;
+  created_at: string;
+}
+
+export const dbSqliteList = () => call<DatabaseFile[]>("db_sqlite_list");
+export const dbSqliteCreate = (name: string) =>
+  call<string>("db_sqlite_create", { name });
+export const dbSqliteDelete = (name: string) =>
+  call<void>("db_sqlite_delete", { name });
+export const dbSqliteTables = (name: string) =>
+  call<TableInfo[]>("db_sqlite_tables", { name });
+export const dbSqliteQueryTable = (
+  name: string,
+  table: string,
+  limit?: number,
+  offset?: number,
+) =>
+  call<QueryResult>("db_sqlite_query_table", { name, table, limit, offset });
+export const dbSqliteExecute = (name: string, sql: string) =>
+  call<QueryResult>("db_sqlite_execute", { name, sql });
+
+export const dbRemoteList = () => call<ConnectionProfile[]>("db_remote_list");
+export const dbRemoteAdd = (profile: ConnectionProfile) =>
+  call<void>("db_remote_add", { profile });
+export const dbRemoteRemove = (id: string) =>
+  call<void>("db_remote_remove", { id });
+export const dbRemoteTest = (profile: ConnectionProfile) =>
+  call<string>("db_remote_test", { profile });
+
 // 示例（M1 骨架验证用）
 export const greet = (name: string) => call<string>("greet", { name });
