@@ -1,48 +1,121 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
-import { greet, getDataDir, isDesktop } from "../api";
+import { onMounted, ref } from "vue";
+import { useAppStore } from "../stores/app";
+import { isDesktop } from "../api";
 
-const greeting = ref("");
+const store = useAppStore();
 const dataDir = ref("");
-const loading = ref(false);
+const starting = ref(false);
 
 async function load() {
-  loading.value = true;
+  store.loading = true;
   try {
-    greeting.value = await greet("开发者");
+    await Promise.all([store.refreshRuntimes(), store.refreshSites()]);
+    await store.refreshStatus();
+    const { getDataDir } = await import("../api");
     dataDir.value = await getDataDir();
   } catch (e) {
-    greeting.value = `调用失败：${e}`;
+    console.error("加载仪表盘失败", e);
   } finally {
-    loading.value = false;
+    store.loading = false;
   }
 }
 
-onMounted(load);
+async function toggleRuntime() {
+  starting.value = true;
+  try {
+    if (store.running) {
+      await store.stopRuntime();
+    } else {
+      await store.startRuntime();
+    }
+  } catch (e) {
+    alert(`操作失败：${e}`);
+  } finally {
+    starting.value = false;
+  }
+}
+
+const statusType = computed(() =>
+  store.running ? "success" : "default"
+);
+const statusText = computed(() => (store.running ? "运行中" : "已停止"));
+
+import { computed } from "vue";
 </script>
 
 <template>
   <n-space vertical size="large">
-    <n-card title="运行状态">
-      <n-descriptions :column="1" label-placement="left">
+    <n-grid :cols="3" :x-gap="16">
+      <n-gi>
+        <n-card>
+          <n-statistic label="运行状态">
+            <template #default>
+              <n-tag :type="statusType" size="large" round>
+                {{ statusText }}
+              </n-tag>
+            </template>
+          </n-statistic>
+        </n-card>
+      </n-gi>
+      <n-gi>
+        <n-card>
+          <n-statistic label="已安装站点" :value="store.sites.length" />
+        </n-card>
+      </n-gi>
+      <n-gi>
+        <n-card>
+          <n-statistic label="运行时版本">
+            <template #default>
+              {{ store.defaultRuntime?.version ?? "未安装" }}
+            </template>
+          </n-statistic>
+        </n-card>
+      </n-gi>
+    </n-grid>
+
+    <n-card title="快捷操作">
+      <n-space>
+        <n-button
+          :type="store.running ? 'error' : 'primary'"
+          :loading="starting"
+          :disabled="!store.hasRuntime"
+          @click="toggleRuntime"
+        >
+          {{ store.running ? "停止服务" : "启动服务" }}
+        </n-button>
+        <n-button :disabled="!store.running" @click="store.reloadRuntime()">
+          热重载配置
+        </n-button>
+        <n-button @click="load">刷新状态</n-button>
+      </n-space>
+    </n-card>
+
+    <n-card title="运行时详情">
+      <n-descriptions :column="1" label-placement="left" bordered>
         <n-descriptions-item label="运行模式">
           {{ isDesktop ? "桌面端（Tauri）" : "Web 面板" }}
         </n-descriptions-item>
         <n-descriptions-item label="数据目录">
           <n-text code>{{ dataDir || "加载中…" }}</n-text>
         </n-descriptions-item>
+        <n-descriptions-item label="已安装运行时">
+          <n-space>
+            <n-tag
+              v-for="rt in store.runtimes"
+              :key="rt.version"
+              :type="rt.is_default ? 'success' : 'default'"
+            >
+              v{{ rt.version }}
+            </n-tag>
+            <n-text v-if="!store.hasRuntime" depth="3">未安装</n-text>
+          </n-space>
+        </n-descriptions-item>
       </n-descriptions>
     </n-card>
 
-    <n-card title="后端连通性测试">
-      <n-space align="center">
-        <n-button :loading="loading" @click="load">调用 greet 命令</n-button>
-        <n-text v-if="greeting">{{ greeting }}</n-text>
-      </n-space>
-    </n-card>
-
-    <n-alert type="info" title="M1 阶段">
-      脚手架验证中。运行时下载、站点管理等功能将在后续里程碑实现。
+    <n-alert type="info" :bordered="false">
+      未安装运行时时，请到「设置」页面下载 FrankenPHP。
     </n-alert>
   </n-space>
 </template>

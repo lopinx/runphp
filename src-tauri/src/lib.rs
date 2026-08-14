@@ -122,7 +122,10 @@ async fn runtime_stop() -> Result<(), String> {
 /// 热重载配置。
 #[tauri::command]
 async fn runtime_reload() -> Result<(), String> {
-    caddy::reload().await.map_err(|e| e.to_string())?;
+    let cfg = cfg();
+    let mgr = RuntimeManager::new(cfg.clone());
+    let rt = mgr.resolve(None).map_err(|e| e.to_string())?;
+    caddy::reload(&cfg, &rt.path).await.map_err(|e| e.to_string())?;
     Ok(())
 }
 
