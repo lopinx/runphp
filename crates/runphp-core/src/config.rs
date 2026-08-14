@@ -1,0 +1,91 @@
+//! 应用配置与状态持久化（数据目录下 JSON 文件）。
+
+use crate::{Error, Result};
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+
+/// 配置文件在数据目录下的相对位置。
+const CONFIG_FILE: &str = "config.json";
+
+/// 应用全局配置。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AppConfig {
+    /// 数据目录（运行时、站点、日志、元数据的根）。
+    pub data_dir: PathBuf,
+    /// FrankenPHP 下载镜像基址（默认官方 GitHub Releases）。
+    pub runtime_mirror: String,
+    /// 默认运行时版本（站点未指定时使用）。
+    pub default_runtime_version: String,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            data_dir: crate::default_data_dir(),
+            runtime_mirror: "https://github.com/dunglas/frankenphp/releases/download".to_string(),
+            default_runtime_version: String::new(),
+        }
+    }
+}
+
+impl AppConfig {
+    /// 加载配置；不存在时返回默认值（不落盘）。
+    pub fn load(data_dir: &Path) -> Result<Self> {
+        let path = data_dir.join(CONFIG_FILE);
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let raw = std::fs::read_to_string(&path)?;
+        let mut cfg: AppConfig = serde_json::from_str(&raw)
+            .map_err(|e| Error::Config(format!("配置文件解析失败: {e}")))?;
+        // 数据目录以实际位置为准（防止配置被复制到别处）
+        cfg.data_dir = data_dir.to_path_buf();
+        Ok(cfg)
+    }
+
+    /// 保存配置到数据目录。
+    pub fn save(&self) -> Result<()> {
+        std::fs::create_dir_all(&self.data_dir)?;
+        let path = self.data_dir.join(CONFIG_FILE);
+        let raw = serde_json::to_string_pretty(self)?;
+        std::fs::write(&path, raw)?;
+        Ok(())
+    }
+
+    /// 运行时二进制存放目录：`数据目录/runtimes`。
+    pub fn runtimes_dir(&self) -> PathBuf {
+        self.data_dir.join("runtimes")
+    }
+
+    /// 站点根目录默认位置：`数据目录/sites`。
+    pub fn sites_dir(&self) -> PathBuf {
+        self.data_dir.join("sites")
+    }
+
+    /// 日志目录：`数据目录/logs`。
+    pub fn logs_dir(&self) -> PathBuf {
+        self.data_dir.join("logs")
+    }
+
+    /// 生成的 Caddyfile 路径。
+    pub fn caddyfile_path(&self) -> PathBuf {
+        self.data_dir.join("Caddyfile")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 配置保存与加载往返() {
+        let dir = std::env::temp_dir().join("runphp-config-test");
+        let mut cfg = AppConfig::default();
+        cfg.data_dir = dir.clone();
+        cfg.save().unwrap();
+        let loaded = AppConfig::load(&dir).unwrap();
+        assert_eq!(loaded.data_dir, dir);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

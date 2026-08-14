@@ -1,0 +1,1 @@
+import{d as o,c as t,a as n,b as s}from"./index-CNZNbpqL.js";const _=o({__name:"HostsView",setup(c){return(p,a)=>{const e=n("n-empty");return s(),t(e,{description:"Hosts 管理功能开发中（M4 里程碑）"})}}});export{_ as default};

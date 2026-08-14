@@ -1,0 +1,1 @@
+import{d as n,c as t,a as o,b as s}from"./index-CNZNbpqL.js";const _=n({__name:"SettingsView",setup(c){return(p,a)=>{const e=o("n-empty");return s(),t(e,{description:"设置页面开发中（随各里程碑逐步填充）"})}}});export{_ as default};
