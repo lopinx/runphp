@@ -1,7 +1,10 @@
 //! Tauri 2 桌面壳：薄封装 runphp-core，不含业务逻辑。
 
 use runphp_core::{
-    caddy, hosts::{entries_from_sites, HostEntry, HostsManager},
+    caddy,
+    db::{remote::*, sqlite::*, DatabaseFile},
+    db::remote::RemoteDbManager,
+    hosts::{entries_from_sites, HostEntry, HostsManager},
     AppConfig, RuntimeManager, Site,
 };
 use tauri::Emitter;
@@ -178,6 +181,83 @@ fn hosts_elevation() -> String {
     HostsManager::system().elevation_command("sync")
 }
 
+// ---- 数据库管理 ----
+
+/// SQLite 管理器实例。
+fn sqlite_mgr() -> SqliteManager {
+    SqliteManager::new(cfg().data_dir.join("databases"))
+}
+
+/// 列出 SQLite 数据库文件。
+#[tauri::command]
+fn db_sqlite_list() -> Result<Vec<DatabaseFile>, String> {
+    sqlite_mgr().list_databases().map_err(|e| e.to_string())
+}
+
+/// 创建 SQLite 数据库。
+#[tauri::command]
+fn db_sqlite_create(name: String) -> Result<String, String> {
+    let path = sqlite_mgr().create_database(&name).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// 删除 SQLite 数据库。
+#[tauri::command]
+fn db_sqlite_delete(name: String) -> Result<(), String> {
+    sqlite_mgr().delete_database(&name).map_err(|e| e.to_string())
+}
+
+/// 列出表。
+#[tauri::command]
+fn db_sqlite_tables(name: String) -> Result<Vec<TableInfo>, String> {
+    sqlite_mgr().list_tables(&name).map_err(|e| e.to_string())
+}
+
+/// 查询表数据。
+#[tauri::command]
+fn db_sqlite_query_table(name: String, table: String, limit: Option<i64>, offset: Option<i64>) -> Result<QueryResult, String> {
+    let lim = limit.unwrap_or(100);
+    let off = offset.unwrap_or(0);
+    sqlite_mgr()
+        .query_table(&name, &table, lim, off)
+        .map_err(|e| e.to_string())
+}
+
+/// 执行 SQL。
+#[tauri::command]
+fn db_sqlite_execute(name: String, sql: String) -> Result<QueryResult, String> {
+    sqlite_mgr().execute(&name, &sql).map_err(|e| e.to_string())
+}
+
+/// 列出远程数据库连接档案。
+#[tauri::command]
+fn db_remote_list() -> Result<Vec<ConnectionProfile>, String> {
+    let mgr = RemoteDbManager::new(&cfg().data_dir);
+    mgr.load().map(|r| r.profiles).map_err(|e| e.to_string())
+}
+
+/// 添加远程连接档案。
+#[tauri::command]
+fn db_remote_add(profile: ConnectionProfile) -> Result<(), String> {
+    let mgr = RemoteDbManager::new(&cfg().data_dir);
+    mgr.add(profile).map_err(|e| e.to_string())
+}
+
+/// 删除远程连接档案。
+#[tauri::command]
+fn db_remote_remove(id: String) -> Result<(), String> {
+    let mgr = RemoteDbManager::new(&cfg().data_dir);
+    mgr.remove(&id).map_err(|e| e.to_string())
+}
+
+/// 测试远程连接。
+#[tauri::command]
+async fn db_remote_test(profile: ConnectionProfile) -> Result<String, String> {
+    RemoteDbManager::test_connection(&profile)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 // 给前端的简化结构（路径转字符串）。
 #[derive(serde::Serialize)]
 struct RuntimeInfo {
@@ -207,6 +287,16 @@ pub fn run() {
             hosts_sync,
             hosts_content,
             hosts_elevation,
+            db_sqlite_list,
+            db_sqlite_create,
+            db_sqlite_delete,
+            db_sqlite_tables,
+            db_sqlite_query_table,
+            db_sqlite_execute,
+            db_remote_list,
+            db_remote_add,
+            db_remote_remove,
+            db_remote_test,
         ])
         .run(tauri::generate_context!())
         .expect("运行 Tauri 应用时出错");

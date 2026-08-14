@@ -22,3 +22,8 @@ zip = { version = "4", default-features = false, features = ["deflate"] }
 # Linux 可执行位设置
 libc = "0.2"
 futures-util = "0.3"
+# SQLite 引擎（内置）
+rusqlite = { version = "0.37", features = ["bundled"] }
+# MySQL/PostgreSQL 客户端（仅连接管理已有实例，不含 sqlite 避免与 rusqlite 冲突）
+mysql_async = { version = "0.35", default-features = false, features = ["minimal-rust"] }
+tokio-postgres = { version = "0.7", features = ["with-serde_json-1"] }

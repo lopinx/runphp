@@ -4,6 +4,7 @@
 
 pub mod caddy;
 pub mod config;
+pub mod db;
 pub mod error;
 pub mod hosts;
 pub mod runtime;
