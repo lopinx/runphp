@@ -72,5 +72,17 @@ export const siteAdd = (site: Site) => call<void>("site_add", { site });
 export const siteUpdate = (site: Site) => call<void>("site_update", { site });
 export const siteRemove = (id: string) => call<void>("site_remove", { id });
 
+// Hosts
+export interface HostEntry {
+  ip: string;
+  host: string;
+  comment: string | null;
+}
+export const hostsList = () => call<HostEntry[]>("hosts_list");
+export const hostsWritable = () => call<boolean>("hosts_writable");
+export const hostsSync = () => call<number>("hosts_sync");
+export const hostsContent = () => call<string>("hosts_content");
+export const hostsElevation = () => call<string>("hosts_elevation");
+
 // 示例（M1 骨架验证用）
 export const greet = (name: string) => call<string>("greet", { name });

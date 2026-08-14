@@ -5,11 +5,13 @@
 pub mod caddy;
 pub mod config;
 pub mod error;
+pub mod hosts;
 pub mod runtime;
 pub mod site;
 
 pub use config::AppConfig;
 pub use error::Error;
+pub use hosts::{HostEntry, HostsManager};
 pub use runtime::RuntimeManager;
 pub use site::{Site, SiteRegistry};
 

@@ -1,6 +1,9 @@
 //! Tauri 2 桌面壳：薄封装 runphp-core，不含业务逻辑。
 
-use runphp_core::{caddy, AppConfig, RuntimeManager, Site};
+use runphp_core::{
+    caddy, hosts::{entries_from_sites, HostEntry, HostsManager},
+    AppConfig, RuntimeManager, Site,
+};
 use tauri::Emitter;
 
 /// 取应用配置。
@@ -135,6 +138,46 @@ async fn runtime_status() -> bool {
     caddy::status().await
 }
 
+// ---- Hosts 管理 ----
+
+/// 列出受管区块内的 hosts 条目。
+#[tauri::command]
+fn hosts_list() -> Result<Vec<HostEntry>, String> {
+    let hm = HostsManager::system();
+    hm.list_managed().map_err(|e| e.to_string())
+}
+
+/// 检测 hosts 是否可直接写入。
+#[tauri::command]
+fn hosts_writable() -> bool {
+    HostsManager::system().check_writable()
+}
+
+/// 同步全部站点域名到 hosts。
+#[tauri::command]
+fn hosts_sync() -> Result<usize, String> {
+    let cfg = cfg();
+    let reg = cfg.load_sites().map_err(|e| e.to_string())?;
+    let entries = entries_from_sites(&reg.sites);
+    let count = entries.len();
+    let hm = HostsManager::system();
+    hm.sync(&entries).map_err(|e| e.to_string())?;
+    Ok(count)
+}
+
+/// 显示 hosts 全文（只读查看）。
+#[tauri::command]
+fn hosts_content() -> Result<String, String> {
+    let hm = HostsManager::system();
+    hm.read().map_err(|e| e.to_string())
+}
+
+/// 获取提权命令。
+#[tauri::command]
+fn hosts_elevation() -> String {
+    HostsManager::system().elevation_command("sync")
+}
+
 // 给前端的简化结构（路径转字符串）。
 #[derive(serde::Serialize)]
 struct RuntimeInfo {
@@ -159,6 +202,11 @@ pub fn run() {
             site_add,
             site_update,
             site_remove,
+            hosts_list,
+            hosts_writable,
+            hosts_sync,
+            hosts_content,
+            hosts_elevation,
         ])
         .run(tauri::generate_context!())
         .expect("运行 Tauri 应用时出错");

@@ -33,6 +33,11 @@ enum Command {
         #[command(subcommand)]
         action: SiteCmd,
     },
+    /// Hosts 管理
+    Hosts {
+        #[command(subcommand)]
+        action: HostsCmd,
+    },
     /// 启动 FrankenPHP（前台运行）
     Run,
     /// 停止运行中的 FrankenPHP
@@ -71,6 +76,16 @@ enum SiteCmd {
     },
     /// 删除站点
     Rm { id: String },
+}
+
+#[derive(Subcommand)]
+enum HostsCmd {
+    /// 列出受管区块内的 hosts 条目
+    List,
+    /// 同步全部站点域名到 hosts
+    Sync,
+    /// 显示提权命令（无写入权限时使用）
+    Elevation,
 }
 
 fn load_cfg(data_dir: Option<PathBuf>) -> AppConfig {
@@ -185,6 +200,54 @@ async fn main() {
                 }
             }
         },
+        Command::Hosts { action } => {
+            use runphp_core::hosts::{entries_from_sites, HostsManager};
+            let hm = HostsManager::system();
+            match action {
+                HostsCmd::List => {
+                    match hm.list_managed() {
+                        Ok(entries) => {
+                            if entries.is_empty() {
+                                println!("受管区块为空。");
+                            } else {
+                                for e in &entries {
+                                    let c = e.comment.as_deref().unwrap_or("");
+                                    println!("{} {} {}", e.ip, e.host, c);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("读取 hosts 失败: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                HostsCmd::Sync => {
+                    let reg = cfg.load_sites().unwrap_or_default();
+                    let entries = entries_from_sites(&reg.sites);
+                    if entries.is_empty() {
+                        println!("无站点域名需要同步。");
+                        return;
+                    }
+                    if !hm.check_writable() {
+                        eprintln!("无写入 hosts 权限。请使用提权命令：");
+                        println!("{}", hm.elevation_command("sync"));
+                        std::process::exit(1);
+                    }
+                    match hm.sync(&entries) {
+                        Ok(()) => println!("已同步 {} 条 hosts 记录。", entries.len()),
+                        Err(e) => {
+                            eprintln!("同步失败: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                HostsCmd::Elevation => {
+                    println!("提权命令（复制到管理员终端执行）：");
+                    println!("{}", hm.elevation_command("sync"));
+                }
+            }
+        }
         Command::Run => {
             let mgr = RuntimeManager::new(cfg.clone());
             let rt = match mgr.resolve(None) {
