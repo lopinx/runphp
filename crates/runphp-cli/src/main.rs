@@ -3,6 +3,8 @@
 //! 提供运行时管理、站点管理、启动停止等子命令，供无头 Linux 模式使用。
 //! M2 阶段实现 runtime / site / run 三类命令。
 
+mod panel;
+
 use clap::{Parser, Subcommand};
 use runphp_core::{caddy, AppConfig, RuntimeManager, Site};
 use std::path::PathBuf;
@@ -46,6 +48,20 @@ enum Command {
     Reload,
     /// 查询运行状态
     Status,
+    /// 启动 Web 管理面板
+    Panel {
+        /// 监听端口
+        #[arg(long, default_value = "9080")]
+        port: u16,
+        /// 监听地址（默认 127.0.0.1，0.0.0.0 允许外部）
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        /// 鉴权 token（不设则不鉴权）
+        #[arg(long)]
+        token: Option<String>,
+    },
+    /// 安装 systemd 服务（Linux）
+    ServiceInstall,
 }
 
 #[derive(Subcommand)]
@@ -321,5 +337,61 @@ async fn main() {
                 }
             }
         }
+        Command::Panel { port, host, token } => {
+            println!("启动 RunPHP Web 管理面板…");
+            if let Err(e) = panel::serve(cfg, port, &host, token).await {
+                eprintln!("面板启动失败: {e}");
+                std::process::exit(1);
+            }
+        }
+        Command::ServiceInstall => {
+            install_systemd_service(&cfg).await;
+        }
     }
+}
+
+/// 生成并安装 systemd 服务单元（仅 Linux）。
+async fn install_systemd_service(cfg: &AppConfig) {
+    if !cfg!(target_os = "linux") {
+        eprintln!("systemd 服务安装仅支持 Linux。");
+        std::process::exit(1);
+    }
+
+    let exe = std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "runphp".to_string());
+
+    let unit = format!(
+        r#"[Unit]
+Description=RunPHP PHP 建站环境管理服务
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={exe} run
+WorkingDirectory={data_dir}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+"#,
+        data_dir = cfg.data_dir.display()
+    );
+
+    let unit_path = "/etc/systemd/system/runphp.service";
+    let tmp_path = "/tmp/runphp.service";
+
+    if let Err(e) = std::fs::write(tmp_path, &unit) {
+        eprintln!("写入临时文件失败: {e}");
+        std::process::exit(1);
+    }
+
+    println!("已生成 systemd 单元文件: {tmp_path}");
+    println!("请以 root 权限执行以下命令完成安装:\n");
+    println!("  sudo cp {tmp_path} {unit_path}");
+    println!("  sudo systemctl daemon-reload");
+    println!("  sudo systemctl enable runphp");
+    println!("  sudo systemctl start runphp");
+    println!("\n查看日志: sudo journalctl -u runphp -f");
 }
