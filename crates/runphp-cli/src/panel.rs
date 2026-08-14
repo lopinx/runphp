@@ -21,6 +21,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 /// 面板共享状态。
+#[allow(dead_code)]
 struct PanelState {
     cfg: AppConfig,
     token: Option<String>,
@@ -66,8 +67,8 @@ pub async fn serve(cfg: AppConfig, port: u16, host: &str, token: Option<String>)
     Ok(())
 }
 
-// ---- 鉴权中间件（内联检查） ----
-
+// ---- 鉴权检查（预留，当前面板端点内联使用） ----
+#[allow(dead_code)]
 fn check_auth(headers: &HeaderMap, token: &Option<String>) -> bool {
     match token {
         None => true, // 无 token 则不鉴权（仅本地使用）

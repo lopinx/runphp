@@ -103,7 +103,7 @@ pub async fn start(cfg: &AppConfig, binary: &std::path::Path) -> Result<(Process
     let log_file = std::fs::File::create(&log_path)?;
     let stderr = log_file.try_clone()?;
 
-    let mut child = Command::new(binary)
+    let child = Command::new(binary)
         .arg("run")
         .arg("--config")
         .arg(&caddyfile)

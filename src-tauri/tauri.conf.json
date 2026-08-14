@@ -27,7 +27,15 @@
     "active": true,
     "targets": "all",
     "icon": [
+      "icons/icon.ico",
       "icons/icon.png"
-    ]
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
+    },
+    "longDescription": "RunPHP —— 基于 FrankenPHP 的 PHP 建站环境管理软件",
+    "shortDescription": "PHP 建站环境管理"
   }
 }
