@@ -1,0 +1,18 @@
+[package]
+name = "runphp-core"
+description = "RunPHP 核心业务逻辑：运行时、站点、数据库、hosts 管理（无 UI 依赖）"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+dirs = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }

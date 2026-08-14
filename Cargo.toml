@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = ["crates/runphp-core", "crates/runphp-cli", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["lopinx"]
+license = "MIT"
+
+[workspace.dependencies]
+# 序列化与错误处理
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# HTTP 客户端（运行时下载、Caddy admin API）
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+# 跨平台目录（数据目录定位）
+dirs = "6"
+# 时间处理
+chrono = { version = "0.4", features = ["serde"] }
+# 唯一标识
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

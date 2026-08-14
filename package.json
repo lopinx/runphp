@@ -1,0 +1,32 @@
+{
+  "name": "runphp",
+  "private": true,
+  "version": "0.1.0",
+  "description": "RunPHP 前端：桌面壳与 Web 面板共用",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@vicons/ionicons5": "^0.13",
+    "naive-ui": "^2",
+    "pinia": "^3",
+    "vue": "^3",
+    "vue-router": "^4"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/node": "^26.2.0",
+    "@vitejs/plugin-vue": "^6",
+    "typescript": "^5",
+    "vite": "^7",
+    "vue-tsc": "^3"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}
