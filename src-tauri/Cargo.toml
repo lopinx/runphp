@@ -8,7 +8,10 @@ license.workspace = true
 
 [lib]
 name = "runphp_desktop_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# 仅桌面端：rlib 供本 crate 的 bin 链接。
+# 不用 cdylib/staticlib——windows-gnu 目标下符号过多会导致
+# "export ordinal too large" 链接错误；移动端目标暂不支持。
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
