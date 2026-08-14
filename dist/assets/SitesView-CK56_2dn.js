@@ -1,1 +1,0 @@
-import{d as n,c as o,a as t,b as s}from"./index-CNZNbpqL.js";const _=n({__name:"SitesView",setup(c){return(p,a)=>{const e=t("n-empty");return s(),o(e,{description:"站点管理功能开发中（M3 里程碑）"})}}});export{_ as default};
