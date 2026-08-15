@@ -15,15 +15,41 @@ export async function call<T>(cmd: string, args: Record<string, unknown> = {}): 
     const { invoke } = await import("@tauri-apps/api/core");
     return invoke<T>(cmd, args);
   }
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const token = panelToken();
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
   const res = await fetch(`/api/${cmd}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(args),
   });
+  if (res.status === 401) {
+    throw new Error("未授权：请在 URL 中携带 ?token=<面板令牌>");
+  }
   if (!res.ok) {
     throw new Error(await res.text());
   }
   return res.json();
+}
+
+/**
+ * 面板鉴权 token：优先取 URL 参数 ?token=xxx（自动存入 localStorage），
+ * 之后同域访问直接读 localStorage。
+ */
+export function panelToken(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const fromUrl = new URLSearchParams(window.location.search).get("token");
+    if (fromUrl) {
+      window.localStorage.setItem("runphp_token", fromUrl);
+      return fromUrl;
+    }
+    return window.localStorage.getItem("runphp_token");
+  } catch {
+    return null;
+  }
 }
 
 // ---- 类型定义（与 Rust 端 serde 序列化对齐） ----
