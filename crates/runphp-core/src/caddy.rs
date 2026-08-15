@@ -131,22 +131,50 @@ pub async fn start(cfg: &AppConfig, binary: &std::path::Path) -> Result<(Process
 }
 
 /// 通过 admin API 停止运行中的 FrankenPHP。
+///
+/// 先尝试 admin API `/stop`，然后读取 PID 文件，
+/// 如果进程仍在运行则兜底 kill。
 pub async fn stop(cfg: &AppConfig) -> Result<()> {
-    let url = "http://127.0.0.1:2019/stop";
+    let pid_file = cfg.data_dir.join("frankenphp.pid");
+
+    // 尝试 admin API 停止
     let client = reqwest::Client::new();
-    let resp = client.post(url).send().await;
-    // 忽略连接失败（可能进程已退出）
+    let resp = client.post("http://127.0.0.1:2019/stop").send().await;
     if let Ok(r) = resp {
         if !r.status().is_success() {
             tracing::warn!("admin API /stop 返回非成功状态: {}", r.status());
         }
     }
-    // 清理 PID 文件
-    let pid_file = cfg.data_dir.join("frankenphp.pid");
+
+    // 读取 PID 并兜底 kill（进程可能未响应 admin API）
     if pid_file.exists() {
+        if let Ok(pid_str) = std::fs::read_to_string(&pid_file) {
+            if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                kill_process(pid);
+            }
+        }
         std::fs::remove_file(&pid_file).ok();
     }
     Ok(())
+}
+
+/// 跨平台终止进程。
+#[cfg(unix)]
+fn kill_process(pid: u32) {
+    // SIGTERM
+    unsafe {
+        libc::kill(pid as i32, libc::SIGTERM);
+    }
+}
+
+/// 跨平台终止进程（Windows）。
+#[cfg(not(unix))]
+fn kill_process(pid: u32) {
+    use std::process::Command;
+    // taskkill /F /PID <pid> /T 终止进程树
+    let _ = Command::new("taskkill")
+        .args(["/F", "/PID", &pid.to_string(), "/T"])
+        .output();
 }
 
 /// 通过子进程 `frankenphp reload --config` 热重载配置（不中断连接）。

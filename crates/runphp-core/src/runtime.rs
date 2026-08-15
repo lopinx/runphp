@@ -46,8 +46,10 @@ impl RuntimeManager {
     }
 
     /// 运行时版本目录：`数据目录/runtimes/<version>`。
+    ///
+    /// 版本号仅允许字母、数字、点、连字符，防止路径穿越。
     pub fn version_dir(&self, version: &str) -> PathBuf {
-        self.cfg.runtimes_dir().join(version)
+        self.cfg.runtimes_dir().join(sanitize_version(version))
     }
 
     /// 该版本二进制路径（Windows 带 .exe）。
@@ -222,6 +224,15 @@ fn set_executable(path: &Path) -> Result<()> {
         let _ = path;
     }
     Ok(())
+}
+
+/// 清理版本号，防止路径穿越。
+/// 仅允许字母、数字、点、连字符。
+fn sanitize_version(version: &str) -> String {
+    version
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-')
+        .collect()
 }
 
 #[cfg(test)]

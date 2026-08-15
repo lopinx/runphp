@@ -9,6 +9,7 @@ import {
   siteAdd,
   siteUpdate,
   siteRemove,
+  runtimeReload,
   type Site,
   type RuntimeInfo,
 } from "../api";
@@ -46,16 +47,17 @@ export const useAppStore = defineStore("app", {
 
     async startRuntime() {
       await runtimeStart();
-      this.running = true;
+      // 从后端获取真实状态，而非直接设为 true
+      await this.refreshStatus();
     },
 
     async stopRuntime() {
       await runtimeStop();
-      this.running = false;
+      // 从后端获取真实状态，而非直接设为 false
+      await this.refreshStatus();
     },
 
     async reloadRuntime() {
-      const { runtimeReload } = await import("../api");
       await runtimeReload();
       await this.refreshStatus();
     },
