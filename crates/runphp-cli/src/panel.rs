@@ -140,10 +140,13 @@ async fn asset(axum::extract::Path(file): axum::extract::Path<String>) -> Respon
     match PanelAssets::get(&path) {
         Some(content) => {
             let mime = mime_guess(&path);
-            Response::builder()
+            let builder = Response::builder()
                 .header("Content-Type", mime)
-                .body(axum::body::Body::from(content.data.to_vec()))
-                .unwrap()
+                .body(axum::body::Body::from(content.data.to_vec()));
+            match builder {
+                Ok(resp) => resp.into_response(),
+                Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            }
         }
         None => StatusCode::NOT_FOUND.into_response(),
     }

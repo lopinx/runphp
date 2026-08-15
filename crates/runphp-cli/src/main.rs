@@ -230,8 +230,14 @@ async fn main() {
                 match reg.remove(&id) {
                     Some(s) => {
                         println!("已删除站点: {}", s.name);
-                        let _ = cfg.save_sites(&reg);
-                        let _ = caddy::write_caddyfile(&cfg, &reg.sites);
+                        if let Err(e) = cfg.save_sites(&reg) {
+                            eprintln!("保存失败: {e}");
+                            std::process::exit(1);
+                        }
+                        if let Err(e) = caddy::write_caddyfile(&cfg, &reg.sites) {
+                            eprintln!("生成 Caddyfile 失败: {e}");
+                            std::process::exit(1);
+                        }
                     }
                     None => {
                         eprintln!("站点 {id} 不存在");

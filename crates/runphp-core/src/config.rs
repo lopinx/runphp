@@ -110,6 +110,7 @@ fn atomic_write(path: &Path, content: &str) -> Result<()> {
     std::fs::rename(&tmp, path)?;
     Ok(())
 }
+#[cfg(test)]
 mod tests {
     use super::*;
 

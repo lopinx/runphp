@@ -2,8 +2,10 @@
 import { onMounted, ref, computed } from "vue";
 import { useAppStore } from "../stores/app";
 import { isDesktop, logsRead, getDataDir } from "../api";
+import { useMessage } from "naive-ui";
 
 const store = useAppStore();
+const message = useMessage();
 const dataDir = ref("");
 const starting = ref(false);
 const logText = ref("");
@@ -39,7 +41,7 @@ async function toggleRuntime() {
       await store.startRuntime();
     }
   } catch (e) {
-    alert(`操作失败：${e}`);
+    message.error(`操作失败：${e}`);
   } finally {
     starting.value = false;
   }
