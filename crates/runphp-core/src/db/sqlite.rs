@@ -164,7 +164,10 @@ impl SqliteManager {
     }
 
     /// 查询表中的前 N 行数据。
-    pub fn query_table(&self, db: &str, table: &str, limit: i64, offset: i64) -> Result<QueryResult, Error> {
+    pub fn query_table(&self, db: &str, table: &str, mut limit: i64, mut offset: i64) -> Result<QueryResult, Error> {
+        // 防止负数参数生成无效 SQL
+        if limit < 1 { limit = 100; }
+        if offset < 0 { offset = 0; }
         let escaped_table = escape_ident(table);
         let sql = format!("SELECT * FROM '{escaped_table}' LIMIT {limit} OFFSET {offset}");
         self.execute(&db, &sql)

@@ -103,6 +103,19 @@ impl SiteRegistry {
         if site.domains.is_empty() {
             return Err(Error::Config("至少需要一个域名".into()));
         }
+        // 域名格式校验：禁止空格和路径穿越字符
+        for d in &site.domains {
+            let d = d.trim();
+            if d.is_empty() {
+                return Err(Error::Config("域名不能为空".into()));
+            }
+            if d.contains(' ') {
+                return Err(Error::Config(format!("域名 {d} 不能包含空格")));
+            }
+            if d.contains('/') || d.contains('\\') {
+                return Err(Error::Config(format!("域名 {d} 不能包含路径分隔符")));
+            }
+        }
         // 域名唯一性
         for d in &site.domains {
             let dup = self.sites.iter().any(|s| {
