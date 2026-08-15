@@ -10,19 +10,19 @@ RunPHP 是基于 [FrankenPHP](https://frankenphp.dev) 的 PHP 建站环境管理
 
 ```
 crates/runphp-core/   核心业务库（无 UI 依赖，三端共用）
-  src/caddy.rs        Caddyfile 生成 + FrankenPHP 子进程启停 + 热重载
+  src/caddy.rs        Caddyfile 生成 + FrankenPHP 子进程启停 + 热重载 + 日志读取
   src/config.rs       配置与站点注册表持久化（JSON）
-  src/runtime.rs      FrankenPHP 下载/校验/多版本（GitHub Releases）
+  src/runtime.rs      FrankenPHP 下载/多版本（GitHub Releases）
   src/site.rs         站点模型 + CRUD + 域名校验
   src/hosts.rs        hosts 受管区块读写 + 备份 + 提权
-  src/db/sqlite.rs    rusqlite bundled 引擎
-  src/db/remote.rs    mysql_async + tokio-postgres 连接管理
+  src/db/sqlite.rs    rusqlite bundled 引擎 + 表结构浏览 + SQL 执行器
+  src/db/remote.rs    mysql_async + tokio-postgres 连接管理 + 连接测试
 crates/runphp-cli/    无头二进制（clap CLI + axum 面板）
-  src/main.rs         子命令分发
-  src/panel.rs        axum Web 面板（rust_embed 嵌入 dist/）
+  src/main.rs         子命令分发（runtime/site/hosts/run/stop/reload/status/logs/panel/service-install）
+  src/panel.rs        axum Web 面板（rust_embed 嵌入 dist/，Bearer token 鉴权）
 src-tauri/            Tauri 2 桌面壳（薄封装 core，不含业务逻辑）
 src/                  Vue 3 前端（桌面与面板共用同一构建产物）
-  api/index.ts        适配层：桌面走 invoke，面板走 fetch（按 VITE_RUNPHP_MODE 切换）
+  api/index.ts        适配层：运行时检测 window.__TAURI_INTERNALS__ 自动切换 invoke/fetch
   stores/app.ts       Pinia 状态管理
   views/              五个页面：仪表盘/站点/数据库/Hosts/设置
 docs/                 中文文档（用户手册.md、架构设计.md）

@@ -93,7 +93,7 @@ cargo build -p runphp-cli --release
 ./target/release/runphp panel --port 9080
 
 # ⑥ 安装为 systemd 服务
-./target/release/runphp service install
+./target/release/runphp service-install
 ```
 
 ## 📋 CLI 命令一览
@@ -116,7 +116,7 @@ cargo build -p runphp-cli --release
 | `runphp hosts sync` | 同步站点域名到 hosts |
 | `runphp hosts elevation` | 显示提权命令 |
 | `runphp panel --port <端口>` | 启动 Web 管理面板 |
-| `runphp service install` | 生成 systemd 服务单元 |
+| `runphp service-install` | 生成 systemd 服务单元 |
 
 ## 📁 目录结构
 
