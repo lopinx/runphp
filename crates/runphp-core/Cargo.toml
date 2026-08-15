@@ -19,11 +19,13 @@ uuid = { workspace = true }
 # 下载校验与 Windows zip 解压
 sha2 = "0.10"
 zip = { version = "4", default-features = false, features = ["deflate"] }
-# Linux 可执行位设置
-libc = "0.2"
 futures-util = "0.3"
 # SQLite 引擎（内置）
 rusqlite = { version = "0.37", features = ["bundled"] }
 # MySQL/PostgreSQL 客户端（仅连接管理已有实例，不含 sqlite 避免与 rusqlite 冲突）
 mysql_async = { version = "0.35", default-features = false, features = ["minimal-rust"] }
 tokio-postgres = { version = "0.7", features = ["with-serde_json-1"] }
+
+# Unix 专用：进程信号（kill_process 的 SIGTERM）
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

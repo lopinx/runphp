@@ -116,8 +116,9 @@ async function runSql() {
   try {
     queryResult.value = await dbSqliteExecute(selectedDb.value, sqlEditor.value);
     message.success(`执行成功，影响 ${queryResult.value.affected} 行`);
-    // 如果是 SELECT 则刷新表列表
-    if (sqlEditor.value.trim().toUpperCase().startsWith("CREATE")) {
+    // DDL 语句（CREATE/ALTER/DROP）后刷新表列表
+    const upper = sqlEditor.value.trim().toUpperCase();
+    if (upper.startsWith("CREATE") || upper.startsWith("ALTER") || upper.startsWith("DROP")) {
       await selectDb(selectedDb.value);
     }
   } catch (e) {
