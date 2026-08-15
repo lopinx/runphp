@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onMounted, ref, computed } from "vue";
 import { useAppStore } from "../stores/app";
-import { isDesktop, logsRead } from "../api";
+import { isDesktop, logsRead, getDataDir } from "../api";
 
 const store = useAppStore();
 const dataDir = ref("");
@@ -13,7 +13,6 @@ async function load() {
   try {
     await Promise.all([store.refreshRuntimes(), store.refreshSites()]);
     await store.refreshStatus();
-    const { getDataDir } = await import("../api");
     dataDir.value = await getDataDir();
     await refreshLogs();
   } catch (e) {
@@ -50,8 +49,6 @@ const statusType = computed(() =>
   store.running ? "success" : "default"
 );
 const statusText = computed(() => (store.running ? "运行中" : "已停止"));
-
-import { computed } from "vue";
 </script>
 
 <template>

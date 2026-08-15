@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref, computed } from "vue";
+import { onMounted, ref, computed, h } from "vue";
 import { useAppStore } from "../stores/app";
 import type { Site, WorkerConfig } from "../api";
-import { useMessage, useDialog } from "naive-ui";
+import { useMessage, useDialog, NButton } from "naive-ui";
 
 const store = useAppStore();
 const message = useMessage();
@@ -159,9 +159,6 @@ const columns = computed(() => [
       ]),
   },
 ]);
-
-import { h } from "vue";
-import { NButton } from "naive-ui";
 </script>
 
 <template>

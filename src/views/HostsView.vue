@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onMounted, ref, computed } from "vue";
 import { useAppStore } from "../stores/app";
 import { useMessage } from "naive-ui";
 import {
@@ -69,7 +69,6 @@ async function copyElevation() {
 }
 
 // 预期同步条目（从站点列表推导）
-import { computed } from "vue";
 const expectedEntries = computed(() => {
   const list: { ip: string; host: string; site: string }[] = [];
   for (const s of store.sites) {

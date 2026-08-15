@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted, ref, computed } from "vue";
-import { useMessage, useDialog } from "naive-ui";
+import { onMounted, ref, computed, h } from "vue";
+import { useMessage, useDialog, NButton } from "naive-ui";
 import {
   dbSqliteList,
   dbSqliteCreate,
@@ -35,7 +35,7 @@ const loadingQuery = ref(false);
 // 远程连接部分
 const remoteProfiles = ref<ConnectionProfile[]>([]);
 const showAddRemote = ref(false);
-const testing = ref(false);
+const testingId = ref<string | null>(null);
 const newRemote = ref<ConnectionProfile>({
   id: "",
   name: "",
@@ -176,14 +176,14 @@ async function addRemote() {
 }
 
 async function testRemote(profile: ConnectionProfile) {
-  testing.value = true;
+  testingId.value = profile.id;
   try {
     const result = await dbRemoteTest(profile);
     message.success(result);
   } catch (e) {
     message.error(`连接失败：${e}`);
   } finally {
-    testing.value = false;
+    testingId.value = null;
   }
 }
 
@@ -332,7 +332,7 @@ onMounted(async () => {
               key: 'actions',
               render: (row: ConnectionProfile) =>
                 h('div', { style: 'display:flex; gap:8px' }, [
-                  h(NButton, { size: 'small', loading: testing, onClick: () => testRemote(row) }, () => '测试'),
+                  h(NButton, { size: 'small', loading: testingId === row.id, onClick: () => testRemote(row) } as Record<string, unknown>, () => '测试'),
                   h(NButton, { size: 'small', type: 'error', onClick: () => confirmDeleteRemote(row) }, () => '删除'),
                 ]),
             },
@@ -405,8 +405,5 @@ onMounted(async () => {
 </template>
 
 <script lang="ts">
-import { h } from "vue";
-import { NButton } from "naive-ui";
-
 export default { name: "DatabasesView" };
 </script>
