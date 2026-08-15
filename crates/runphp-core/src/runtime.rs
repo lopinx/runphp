@@ -118,11 +118,29 @@ impl RuntimeManager {
         let tmp = dest_dir.join("download.tmp");
         let bin_path = self.binary_path(version);
 
+        // 执行下载与解压，失败时清理临时文件
+        let result = self.do_download_and_extract(&url, &tmp, &bin_path, &dest_dir, on_progress).await;
+        if result.is_err() {
+            // 清理下载失败残留
+            std::fs::remove_file(&tmp).ok();
+        }
+        result
+    }
+
+    /// 内部：下载、解压、设置可执行位的实际逻辑。
+    async fn do_download_and_extract(
+        &self,
+        url: &str,
+        tmp: &Path,
+        bin_path: &Path,
+        dest_dir: &Path,
+        on_progress: Option<Box<dyn Fn(u64, u64) + Send + Sync>>,
+    ) -> Result<PathBuf> {
         tracing::info!("开始下载运行时: {url}");
         let client = reqwest::Client::builder()
             .user_agent(concat!("RunPHP/", env!("CARGO_PKG_VERSION")))
             .build()?;
-        let resp = client.get(&url).send().await?;
+        let resp = client.get(url).send().await?;
         if !resp.status().is_success() {
             return Err(Error::Runtime(format!(
                 "下载失败: HTTP {}",
@@ -133,7 +151,7 @@ impl RuntimeManager {
 
         use futures_util::StreamExt;
         let mut stream = resp.bytes_stream();
-        let mut file = std::fs::File::create(&tmp)?;
+        let mut file = std::fs::File::create(tmp)?;
         let mut downloaded: u64 = 0;
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
@@ -148,12 +166,12 @@ impl RuntimeManager {
         // Windows: 解压 zip；Linux: 直接落地并赋予可执行位
         if cfg!(target_os = "windows") {
             tracing::info!("解压 Windows zip 到 {}", dest_dir.display());
-            extract_zip(&tmp, &dest_dir)?;
-            std::fs::remove_file(&tmp).ok();
+            extract_zip(tmp, dest_dir)?;
+            std::fs::remove_file(tmp).ok();
         } else {
             // 临时文件即二进制，重命名
-            std::fs::rename(&tmp, &bin_path)?;
-            set_executable(&bin_path)?;
+            std::fs::rename(tmp, bin_path)?;
+            set_executable(bin_path)?;
         }
 
         if !bin_path.exists() {
@@ -162,8 +180,8 @@ impl RuntimeManager {
             ));
         }
 
-        tracing::info!("运行时 {version} 安装完成: {}", bin_path.display());
-        Ok(bin_path)
+        tracing::info!("运行时安装完成: {}", bin_path.display());
+        Ok(bin_path.to_path_buf())
     }
 }
 

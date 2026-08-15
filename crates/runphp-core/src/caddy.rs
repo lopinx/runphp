@@ -35,9 +35,15 @@ fn site_block(site: &Site) -> String {
 
     // PHP 处理：worker 模式或普通模式
     if let Some(w) = &site.worker {
+        // 对 worker 脚本路径加引号（处理含空格的情况）
+        let script = if w.script.contains(' ') {
+            format!("\"{}\"", w.script)
+        } else {
+            w.script.clone()
+        };
         lines.push(format!(
             "    php_server {{\n        worker {} {}\n    }}",
-            w.script, w.num
+            script, w.num
         ));
     } else {
         lines.push("    php_server".into());
