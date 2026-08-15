@@ -75,22 +75,24 @@ fn parse_line(line: &str) -> Option<HostEntry> {
         return None;
     }
     // 格式: IP host [# comment]
-    let mut parts = line.splitn(3, char::is_whitespace);
-    let ip = parts.next()?.trim();
-    let host = parts.next()?.trim();
-    let comment_raw = parts.next().map(|s| s.trim());
-    if ip.is_empty() || host.is_empty() {
-        return None;
-    }
-    // 去掉注释前导 #
-    let comment = comment_raw
-        .filter(|c| !c.is_empty())
-        .map(|c| c.trim_start_matches('#').trim().to_string())
-        .filter(|c| !c.is_empty());
+    // 使用 split_whitespace 正确处理连续空格和制表符
+    let mut parts = line.split_whitespace();
+    let ip = parts.next()?;
+    let host = parts.next()?;
+    // 剩余部分可能包含注释（以 # 开头）或额外字段
+    let rest: Vec<&str> = parts.collect();
+    let comment_raw = if rest.is_empty() {
+        None
+    } else {
+        // 将剩余部分合并，去掉注释前导 #
+        let joined = rest.join(" ");
+        let stripped = joined.trim_start_matches('#').trim();
+        if stripped.is_empty() { None } else { Some(stripped.to_string()) }
+    };
     Some(HostEntry {
         ip: ip.to_string(),
         host: host.to_string(),
-        comment,
+        comment: comment_raw,
     })
 }
 
@@ -302,5 +304,22 @@ mod tests {
         let entries = entries_from_sites(&[s]);
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].ip, "127.0.0.1");
+    }
+
+    #[test]
+    fn 连续空格hosts行正确解析() {
+        // 之前 splitn(3, char::is_whitespace) 对连续空格会产生空字符串段，
+        // 导致 host 为空、整行被跳过。改用 split_whitespace 后修复。
+        let entry = parse_line("127.0.0.1   multiple.test   # 注释");
+        assert!(entry.is_some(), "连续空格行不应被跳过");
+        let e = entry.unwrap();
+        assert_eq!(e.ip, "127.0.0.1");
+        assert_eq!(e.host, "multiple.test");
+        assert_eq!(e.comment.as_deref(), Some("注释"));
+
+        // 制表符分隔也应正常工作
+        let entry2 = parse_line("10.0.0.1\ttab.test");
+        assert!(entry2.is_some());
+        assert_eq!(entry2.unwrap().host, "tab.test");
     }
 }

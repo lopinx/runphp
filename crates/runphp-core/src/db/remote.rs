@@ -88,14 +88,14 @@ impl ConnectionProfile {
     }
 }
 
-/// 简单的 URL 转义。
+/// 简单的 URL 转义（正确处理 UTF-8 多字节字符）。
 fn url_escape(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' {
-                c.to_string()
+    s.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {
+                (b as char).to_string()
             } else {
-                format!("%{:02X}", c as u8)
+                format!("%{b:02X}")
             }
         })
         .collect()
