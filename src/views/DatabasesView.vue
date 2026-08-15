@@ -36,6 +36,13 @@ const loadingQuery = ref(false);
 const remoteProfiles = ref<ConnectionProfile[]>([]);
 const showAddRemote = ref(false);
 const testingId = ref<string | null>(null);
+const DEFAULT_PORTS: Record<DbDriver, number> = {
+  mysql: 3306,
+  postgres: 5432,
+  mongodb: 27017,
+  redis: 6379,
+  qdrant: 6333,
+};
 const newRemote = ref<ConnectionProfile>({
   id: "",
   name: "",
@@ -160,20 +167,17 @@ async function addRemote() {
   }
   p.id = crypto.randomUUID();
   p.created_at = new Date().toISOString();
-  p.port = p.driver === "mysql" ? (p.port || 3306)
-    : p.driver === "postgres" ? (p.port || 5432)
-    : p.driver === "mongodb" ? (p.port || 27017)
-    : p.driver === "redis" ? (p.port || 6379)
-    : (p.port || 6333);
+  p.port = p.port || DEFAULT_PORTS[p.driver] ?? 3306;
   try {
     await dbRemoteAdd(p);
     message.success("连接档案已保存");
     showAddRemote.value = false;
     await loadRemoteProfiles();
-    // 重置
+    // 重置：保留上次选中的驱动类型，仅清空其余字段
+    const prevDriver = p.driver;
     newRemote.value = {
-      id: "", name: "", driver: "mysql", host: "127.0.0.1",
-      port: 3306, username: "root", password: "", database: null, created_at: "",
+      id: "", name: "", driver: prevDriver, host: "127.0.0.1",
+      port: DEFAULT_PORTS[prevDriver] ?? 3306, username: "", password: "", database: null, created_at: "",
     };
   } catch (e) {
     message.error(`保存失败：${e}`);

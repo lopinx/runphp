@@ -13,8 +13,6 @@ use std::path::{Path, PathBuf};
 pub struct DatabaseFile {
     /// 文件名。
     pub name: String,
-    /// 完整路径。
-    pub path: String,
     /// 文件大小（字节）。
     pub size: u64,
 }
@@ -65,7 +63,6 @@ impl SqliteManager {
                     let meta = entry.metadata().map_err(Error::Io)?;
                     files.push(DatabaseFile {
                         name,
-                        path: entry.path().to_string_lossy().to_string(),
                         size: meta.len(),
                     });
                 }
@@ -274,8 +271,15 @@ fn rusqlite_err(e: rusqlite::Error) -> Error {
 }
 
 /// 清理数据库名称，防止路径穿越。
+///
+/// 先剥离常见 SQLite 扩展名（`.db`/`.sqlite`），再对剩余部分做安全替换，
+/// 最后统一追加 `.db` 后缀，保证文件名始终可预测。
 fn sanitize_name(name: &str) -> String {
-    name.replace(['/', '\\', '.', ' ', ':'], "_")
+    // 剥离已存在的 .db / .sqlite 后缀，避免后续替换产生 "my__db" 等问题
+    let base = name.strip_suffix(".db").unwrap_or(name);
+    let base = base.strip_suffix(".sqlite").unwrap_or(base);
+    // 替换路径分隔符、点（防 .. 穿越）、空格、冒号，保留字母数字和下划线
+    base.replace(['/', '\\', '.', ' ', ':'], "_") + ".db"
 }
 
 /// 转义 SQL 标识符（表名/列名），防止标识符注入。
@@ -335,8 +339,10 @@ mod tests {
 
     #[test]
     fn 名称清理防路径穿越() {
-        assert_eq!(sanitize_name("../../etc/passwd"), "______etc_passwd");
-        assert_eq!(sanitize_name("my.db"), "my_db");
+        assert_eq!(sanitize_name("../../etc/passwd"), "______etc_passwd.db");
+        assert_eq!(sanitize_name("my.db"), "my.db");
+        assert_eq!(sanitize_name("my.sqlite"), "my.db");
+        assert_eq!(sanitize_name("my app"), "my_app.db");
     }
 
     #[test]

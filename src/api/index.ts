@@ -117,7 +117,6 @@ export const hostsElevation = () => call<string>("hosts_elevation");
 // 数据库
 export interface DatabaseFile {
   name: string;
-  path: string;
   size: number;
 }
 export interface TableInfo {

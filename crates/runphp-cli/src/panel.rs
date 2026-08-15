@@ -455,7 +455,7 @@ async fn db_remote_add(State(s): S, Json(req): Json<ProfileReq>) -> Response {
     let mgr = RemoteDbManager::new(&s.cfg.data_dir);
     match mgr.add(req.profile) {
         Ok(()) => Json(Value::Null).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     }
 }
 
@@ -463,7 +463,7 @@ async fn db_remote_remove(State(s): S, Json(req): Json<IdReq>) -> Response {
     let mgr = RemoteDbManager::new(&s.cfg.data_dir);
     match mgr.remove(&req.id) {
         Ok(()) => Json(Value::Null).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     }
 }
 
