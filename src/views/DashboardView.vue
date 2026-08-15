@@ -133,8 +133,8 @@ import { computed } from "vue";
       </n-descriptions>
     </n-card>
 
-    <n-alert type="info" :bordered="false">
-      未安装运行时时，请到「设置」页面下载 FrankenPHP。
+    <n-alert v-if="!store.hasRuntime" type="info" :bordered="false">
+      尚未安装运行时，请到「设置」页面下载 FrankenPHP。
     </n-alert>
   </n-space>
 </template>
