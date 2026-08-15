@@ -173,59 +173,98 @@ impl SqliteManager {
         self.execute(&db, &sql)
     }
 
-    /// 执行任意 SQL（SELECT 返回结果集，其他返回 affected=0）。
+    /// 执行任意 SQL。
+    ///
+    /// 支持分号分隔的多条语句：
+    /// - 如果是单条 SELECT/PRAGMA/WITH 查询，返回结果集。
+    /// - 如果是多条非查询语句，逐条执行并累计 affected。
+    /// - 如果最后一条是查询，返回其结果集。
     pub fn execute(&self, db: &str, sql: &str) -> Result<QueryResult, Error> {
         let conn = self.connect(db)?;
 
         let trimmed = sql.trim();
-        if trimmed
-            .to_uppercase()
-            .starts_with("SELECT")
-            || trimmed.to_uppercase().starts_with("PRAGMA")
-            || trimmed.to_uppercase().starts_with("WITH")
-        {
-            // 查询语句
-            let mut stmt = conn.prepare(trimmed).map_err(rusqlite_err)?;
-            let col_count = stmt.column_count();
-            let columns: Vec<String> = (0..col_count)
-                .map(|i| stmt.column_name(i).unwrap_or_default().to_string())
-                .collect();
+        // 检测是否含多条语句（分号分隔）
+        let statements: Vec<&str> = trimmed
+            .split(';')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
 
-            let rows_iter = stmt.query_map([], |row| {
-                let mut values = Vec::with_capacity(col_count);
-                for i in 0..col_count {
-                    let val = match row.get_ref(i) {
-                        Ok(rusqlite::types::ValueRef::Null) => serde_json::Value::Null,
-                        Ok(rusqlite::types::ValueRef::Integer(n)) => serde_json::Value::from(n),
-                        Ok(rusqlite::types::ValueRef::Real(f)) => serde_json::Value::from(f),
-                        Ok(rusqlite::types::ValueRef::Text(s)) => {
-                            serde_json::Value::from(String::from_utf8_lossy(s).to_string())
-                        }
-                        Ok(rusqlite::types::ValueRef::Blob(b)) => {
-                            serde_json::Value::from(format!("[BLOB {} 字节]", b.len()))
-                        }
-                        Err(_) => serde_json::Value::Null,
-                    };
-                    values.push(val);
+        if statements.len() > 1 {
+            // 多条语句：逐条执行非查询，最后一条如果是查询则返回结果
+            let mut total_affected = 0usize;
+            let last_idx = statements.len() - 1;
+            for (i, stmt) in statements.iter().enumerate() {
+                let upper = stmt.to_uppercase();
+                if i == last_idx && (upper.starts_with("SELECT")
+                    || upper.starts_with("PRAGMA")
+                    || upper.starts_with("WITH"))
+                {
+                    // 最后一条是查询，返回结果
+                    return self.execute_query(&conn, stmt);
                 }
-                Ok(values)
-            }).map_err(rusqlite_err)?;
-
-            let mut rows = Vec::new();
-            for r in rows_iter {
-                rows.push(r.map_err(rusqlite_err)?);
+                // 非查询语句
+                let affected = conn.execute(stmt, []).map_err(rusqlite_err)?;
+                total_affected += affected as usize;
             }
-            let affected = rows.len();
-            Ok(QueryResult { columns, rows, affected })
-        } else {
-            // 非查询语句
-            let affected = conn.execute(trimmed, []).map_err(rusqlite_err)?;
             Ok(QueryResult {
                 columns: vec![],
                 rows: vec![],
-                affected: affected as usize,
+                affected: total_affected,
             })
+        } else {
+            // 单条语句
+            let upper = trimmed.to_uppercase();
+            if upper.starts_with("SELECT")
+                || upper.starts_with("PRAGMA")
+                || upper.starts_with("WITH")
+            {
+                self.execute_query(&conn, trimmed)
+            } else {
+                let affected = conn.execute(trimmed, []).map_err(rusqlite_err)?;
+                Ok(QueryResult {
+                    columns: vec![],
+                    rows: vec![],
+                    affected: affected as usize,
+                })
+            }
         }
+    }
+
+    /// 执行单条查询语句并返回结果集。
+    fn execute_query(&self, conn: &Connection, sql: &str) -> Result<QueryResult, Error> {
+        let mut stmt = conn.prepare(sql).map_err(rusqlite_err)?;
+        let col_count = stmt.column_count();
+        let columns: Vec<String> = (0..col_count)
+            .map(|i| stmt.column_name(i).unwrap_or_default().to_string())
+            .collect();
+
+        let rows_iter = stmt.query_map([], |row| {
+            let mut values = Vec::with_capacity(col_count);
+            for i in 0..col_count {
+                let val = match row.get_ref(i) {
+                    Ok(rusqlite::types::ValueRef::Null) => serde_json::Value::Null,
+                    Ok(rusqlite::types::ValueRef::Integer(n)) => serde_json::Value::from(n),
+                    Ok(rusqlite::types::ValueRef::Real(f)) => serde_json::Value::from(f),
+                    Ok(rusqlite::types::ValueRef::Text(s)) => {
+                        serde_json::Value::from(String::from_utf8_lossy(s).to_string())
+                    }
+                    Ok(rusqlite::types::ValueRef::Blob(b)) => {
+                        serde_json::Value::from(format!("[BLOB {} 字节]", b.len()))
+                    }
+                    Err(_) => serde_json::Value::Null,
+                };
+                values.push(val);
+            }
+            Ok(values)
+        }).map_err(rusqlite_err)?;
+
+        let mut rows = Vec::new();
+        for r in rows_iter {
+            rows.push(r.map_err(rusqlite_err)?);
+        }
+        let affected = rows.len();
+        Ok(QueryResult { columns, rows, affected })
     }
 }
 
@@ -298,5 +337,29 @@ mod tests {
     fn 名称清理防路径穿越() {
         assert_eq!(sanitize_name("../../etc/passwd"), "______etc_passwd");
         assert_eq!(sanitize_name("my.db"), "my_db");
+    }
+
+    #[test]
+    fn 多语句执行() {
+        let dir = std::env::temp_dir().join("runphp-sqlite-multi-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mgr = SqliteManager::new(dir.clone());
+
+        mgr.create_database("多语句测试").unwrap();
+
+        // 多条非查询语句（分号分隔）
+        let result = mgr
+            .execute("多语句测试.db", "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT); INSERT INTO items (name) VALUES ('A'); INSERT INTO items (name) VALUES ('B');")
+            .unwrap();
+        assert_eq!(result.affected, 2); // 2 条 INSERT
+
+        // 多条语句最后一条为查询
+        let result = mgr
+            .execute("多语句测试.db", "INSERT INTO items (name) VALUES ('C'); SELECT * FROM items;")
+            .unwrap();
+        assert_eq!(result.columns, vec!["id", "name"]);
+        assert_eq!(result.rows.len(), 3); // A, B, C
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

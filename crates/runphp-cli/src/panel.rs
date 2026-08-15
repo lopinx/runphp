@@ -86,6 +86,13 @@ pub async fn serve(
         .route("/", get(index))
         .route("/assets/{*file}", get(asset))
         .nest("/api", api)
+        // 允许跨域（用户可能从不同端口/域名访问面板 API）
+        .layer(
+            tower_http::cors::CorsLayer::new()
+                .allow_origin(tower_http::cors::Any)
+                .allow_methods(tower_http::cors::Any)
+                .allow_headers(tower_http::cors::Any),
+        )
         .with_state(state);
 
     tracing::info!("Web 面板启动: http://{addr}");
