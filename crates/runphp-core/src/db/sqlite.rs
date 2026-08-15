@@ -167,7 +167,7 @@ impl SqliteManager {
         if offset < 0 { offset = 0; }
         let escaped_table = escape_ident(table);
         let sql = format!("SELECT * FROM '{escaped_table}' LIMIT {limit} OFFSET {offset}");
-        self.execute(&db, &sql)
+        self.execute(db, &sql)
     }
 
     /// 执行任意 SQL。
@@ -202,7 +202,7 @@ impl SqliteManager {
                 }
                 // 非查询语句
                 let affected = conn.execute(stmt, []).map_err(rusqlite_err)?;
-                total_affected += affected as usize;
+                total_affected += affected;
             }
             Ok(QueryResult {
                 columns: vec![],
@@ -222,7 +222,7 @@ impl SqliteManager {
                 Ok(QueryResult {
                     columns: vec![],
                     rows: vec![],
-                    affected: affected as usize,
+                    affected,
                 })
             }
         }

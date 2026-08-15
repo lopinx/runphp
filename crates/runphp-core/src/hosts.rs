@@ -171,9 +171,7 @@ impl HostsManager {
         // 写入
         std::fs::write(&self.path, new_content).map_err(|e| {
             if e.kind() == std::io::ErrorKind::PermissionDenied {
-                Error::Config(format!(
-                    "无写入 hosts 权限，需要管理员/提权。请使用提权命令或手动写入。"
-                ))
+                Error::Config("无写入 hosts 权限，需要管理员/提权。请使用提权命令或手动写入。".to_string())
             } else {
                 Error::Io(e)
             }
