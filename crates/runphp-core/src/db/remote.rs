@@ -152,20 +152,30 @@ impl RemoteDbManager {
                 let opts = mysql_async::Opts::from_url(&profile.mysql_dsn())
                     .map_err(|e| Error::Other(format!("MySQL 连接参数错误: {e}")))?;
                 let pool = mysql_async::Pool::new(opts);
-                let mut conn = pool
-                    .get_conn()
-                    .await
-                    .map_err(|e| Error::Other(format!("MySQL 连接失败: {e}")))?;
-                let rows: Vec<(i32,)> = conn
-                    .query("SELECT 1")
-                    .await
-                    .map_err(|e| Error::Other(format!("MySQL 查询失败: {e}")))?;
-                if rows.is_empty() {
-                    return Err(Error::Other("MySQL 查询无结果".into()));
+                // 使用 defer 模式确保 pool 在任何路径下都被 disconnect
+                let result = async {
+                    let mut conn = pool
+                        .get_conn()
+                        .await
+                        .map_err(|e| Error::Other(format!("MySQL 连接失败: {e}")))?;
+                    let rows: Vec<(i32,)> = conn
+                        .query("SELECT 1")
+                        .await
+                        .map_err(|e| Error::Other(format!("MySQL 查询失败: {e}")))?;
+                    if rows.is_empty() {
+                        return Err(Error::Other("MySQL 查询无结果".into()));
+                    }
+                    Ok::<(), Error>(())
                 }
-                drop(conn);
+                .await;
+
+                // 无论成功或失败都清理连接池
                 pool.disconnect().await.ok();
-                Ok("MySQL 连接成功".into())
+
+                match result {
+                    Ok(()) => Ok("MySQL 连接成功".into()),
+                    Err(e) => Err(e),
+                }
             }
             DbDriver::Postgres => {
                 let (client, connection) = profile

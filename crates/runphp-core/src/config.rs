@@ -47,12 +47,12 @@ impl AppConfig {
         Ok(cfg)
     }
 
-    /// 保存配置到数据目录。
+    /// 保存配置到数据目录（原子写入：先写临时文件再 rename）。
     pub fn save(&self) -> Result<()> {
         std::fs::create_dir_all(&self.data_dir)?;
         let path = self.data_dir.join(CONFIG_FILE);
         let raw = serde_json::to_string_pretty(self)?;
-        std::fs::write(&path, raw)?;
+        atomic_write(&path, &raw)?;
         Ok(())
     }
 
@@ -93,16 +93,23 @@ impl AppConfig {
         Ok(reg)
     }
 
-    /// 保存站点注册表。
+    /// 保存站点注册表（原子写入：先写临时文件再 rename）。
     pub fn save_sites(&self, reg: &SiteRegistry) -> Result<()> {
         std::fs::create_dir_all(&self.data_dir)?;
         let raw = serde_json::to_string_pretty(reg)?;
-        std::fs::write(self.sites_file_path(), raw)?;
+        atomic_write(&self.sites_file_path(), &raw)?;
         Ok(())
     }
 }
 
-#[cfg(test)]
+/// 原子写入：先写入临时文件，再 rename 覆盖目标文件。
+/// 防止写入过程中崩溃导致文件损坏。
+fn atomic_write(path: &Path, content: &str) -> Result<()> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, content)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
 mod tests {
     use super::*;
 
