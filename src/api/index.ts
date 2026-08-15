@@ -1,12 +1,13 @@
 /**
  * API 适配层：桌面端走 Tauri invoke，Web 面板走 fetch。
- * 运行模式由构建时注入：VITE_RUNPHP_MODE = "desktop" | "panel"
+ * 运行模式通过运行时检测自动判断：Tauri 2 会在 WebView 中注入
+ * window.__TAURI_INTERNALS__，浏览器面板中没有该对象。
+ * 这样同一份前端构建产物可在桌面壳与 Web 面板两端运行。
  */
 
-const mode = import.meta.env.VITE_RUNPHP_MODE ?? "desktop";
-
 /** 判断当前是否运行在 Tauri 桌面壳中。 */
-export const isDesktop = mode === "desktop";
+export const isDesktop =
+  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 /** 调用后端命令。桌面端走 invoke，面板端走 REST。 */
 export async function call<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
