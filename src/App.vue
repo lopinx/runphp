@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { h } from "vue";
+import { h, computed } from "vue";
 import { RouterLink, RouterView, useRoute } from "vue-router";
 import { NIcon } from "naive-ui";
 import {
@@ -9,7 +9,6 @@ import {
   ServerOutline,
   SettingsOutline,
 } from "@vicons/ionicons5";
-import { computed } from "vue";
 
 const route = useRoute();
 
