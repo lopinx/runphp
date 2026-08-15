@@ -160,7 +160,11 @@ async function addRemote() {
   }
   p.id = crypto.randomUUID();
   p.created_at = new Date().toISOString();
-  p.port = p.driver === "mysql" ? (p.port || 3306) : (p.port || 5432);
+  p.port = p.driver === "mysql" ? (p.port || 3306)
+    : p.driver === "postgres" ? (p.port || 5432)
+    : p.driver === "mongodb" ? (p.port || 27017)
+    : p.driver === "redis" ? (p.port || 6379)
+    : (p.port || 6333);
   try {
     await dbRemoteAdd(p);
     message.success("连接档案已保存");
@@ -311,7 +315,7 @@ onMounted(async () => {
     </n-card>
 
     <!-- 远程连接 -->
-    <n-card title="远程数据库（MySQL / PostgreSQL）">
+    <n-card title="远程数据库（MySQL / PostgreSQL / MongoDB / Redis / Qdrant）">
       <n-space vertical>
         <n-space align="center">
           <n-button type="primary" @click="showAddRemote = true">
@@ -361,6 +365,9 @@ onMounted(async () => {
                 :options="[
                   { label: 'MySQL / MariaDB', value: 'mysql' },
                   { label: 'PostgreSQL', value: 'postgres' },
+                  { label: 'MongoDB', value: 'mongodb' },
+                  { label: 'Redis', value: 'redis' },
+                  { label: 'Qdrant', value: 'qdrant' },
                 ]"
               />
             </n-form-item>

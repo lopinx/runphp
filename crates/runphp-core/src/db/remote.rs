@@ -6,6 +6,7 @@
 use crate::Error;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 // MySQL 异步 trait 需要引入 prelude。
 use mysql_async::prelude::*;
@@ -16,6 +17,9 @@ use mysql_async::prelude::*;
 pub enum DbDriver {
     Mysql,
     Postgres,
+    Mongodb,
+    Redis,
+    Qdrant,
 }
 
 /// 连接档案。
@@ -46,6 +50,9 @@ impl ConnectionProfile {
         let default_port = match driver {
             DbDriver::Mysql => 3306,
             DbDriver::Postgres => 5432,
+            DbDriver::Mongodb => 27017,
+            DbDriver::Redis => 6379,
+            DbDriver::Qdrant => 6333,
         };
         Self {
             id: uuid::Uuid::new_v4().to_string(),
@@ -99,6 +106,17 @@ fn url_escape(s: &str) -> String {
             }
         })
         .collect()
+}
+
+/// 将参数列表格式化为 Redis RESP 协议命令字符串。
+///
+/// 例如 `["PING"]` → `*1\r\n$4\r\nPING\r\n`
+fn format_resp_command(args: &[&str]) -> String {
+    let mut out = format!("*{}\r\n", args.len());
+    for arg in args {
+        out.push_str(&format!("${}\r\n{}\r\n", arg.len(), arg));
+    }
+    out
 }
 
 /// 连接档案集合。
@@ -191,6 +209,77 @@ impl RemoteDbManager {
                     .await
                     .map_err(|e| Error::Other(format!("PostgreSQL 查询失败: {e}")))?;
                 Ok("PostgreSQL 连接成功".into())
+            }
+            DbDriver::Mongodb => {
+                // MongoDB：通过 TCP 探测 + 可选鉴权握手（RESP-like 检测）
+                // 不引入 mongodb 官方 crate（体积过大），仅检测端口可达性
+                let addr = format!("{}:{}", profile.host, profile.port);
+                let timeout = std::time::Duration::from_secs(5);
+                tokio::time::timeout(timeout, tokio::net::TcpStream::connect(&addr))
+                    .await
+                    .map_err(|_| Error::Other(format!("MongoDB 连接超时: {addr}")))?
+                    .map_err(|e| Error::Other(format!("MongoDB 连接失败: {e}")))?;
+                Ok(format!("MongoDB 端口可达: {addr}"))
+            }
+            DbDriver::Redis => {
+                // Redis：通过原始 RESP 协议发送 PING 命令，零依赖
+                let addr = format!("{}:{}", profile.host, profile.port);
+                let timeout = std::time::Duration::from_secs(5);
+                let mut stream = tokio::time::timeout(timeout, tokio::net::TcpStream::connect(&addr))
+                    .await
+                    .map_err(|_| Error::Other(format!("Redis 连接超时: {addr}")))?
+                    .map_err(|e| Error::Other(format!("Redis 连接失败: {e}")))?;
+
+                // 若配置了密码，先发送 AUTH 命令
+                if !profile.password.is_empty() {
+                    let auth_cmd = if profile.username.is_empty() {
+                        // Redis 6 之前：只有密码
+                        format_resp_command(&["AUTH", &profile.password])
+                    } else {
+                        // Redis 6 ACL：用户名 + 密码
+                        format_resp_command(&["AUTH", &profile.username, &profile.password])
+                    };
+                    stream.write_all(auth_cmd.as_bytes()).await.map_err(|e| Error::Other(format!("Redis 发送失败: {e}")))?;
+                    let mut buf = [0u8; 64];
+                    let n = stream.read(&mut buf).await.map_err(|e| Error::Other(format!("Redis 读取失败: {e}")))?;
+                    let resp = String::from_utf8_lossy(&buf[..n]);
+                    if !resp.starts_with("+OK") {
+                        return Err(Error::Other(format!("Redis 鉴权失败: {resp}")));
+                    }
+                }
+
+                // 发送 PING
+                let ping = format_resp_command(&["PING"]);
+                stream.write_all(ping.as_bytes()).await.map_err(|e| Error::Other(format!("Redis 发送失败: {e}")))?;
+                let mut buf = [0u8; 64];
+                let n = stream.read(&mut buf).await.map_err(|e| Error::Other(format!("Redis 读取失败: {e}")))?;
+                let resp = String::from_utf8_lossy(&buf[..n]);
+                if resp.starts_with("+PONG") {
+                    Ok("Redis 连接成功".into())
+                } else {
+                    Err(Error::Other(format!("Redis 响应异常: {resp}")))
+                }
+            }
+            DbDriver::Qdrant => {
+                // Qdrant：通过 HTTP REST API 探测（reqwest 已有依赖）
+                let url = format!("http://{}:{}/readyz", profile.host, profile.port);
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(5))
+                    .build()
+                    .map_err(|e| Error::Other(format!("HTTP 客户端错误: {e}")))?;
+                let resp = client
+                    .get(&url)
+                    .send()
+                    .await
+                    .map_err(|e| Error::Other(format!("Qdrant 连接失败: {e}")))?;
+                if resp.status().is_success() {
+                    Ok("Qdrant 连接成功".into())
+                } else {
+                    Err(Error::Other(format!(
+                        "Qdrant 响应异常: HTTP {}",
+                        resp.status()
+                    )))
+                }
             }
         }
     }

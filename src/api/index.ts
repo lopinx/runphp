@@ -130,7 +130,7 @@ export interface QueryResult {
   rows: any[][];
   affected: number;
 }
-export type DbDriver = "mysql" | "postgres";
+export type DbDriver = "mysql" | "postgres" | "mongodb" | "redis" | "qdrant";
 export interface ConnectionProfile {
   id: string;
   name: string;
