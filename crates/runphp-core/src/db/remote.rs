@@ -420,18 +420,18 @@ impl RemoteDbManager {
     ) -> Result<RemoteQueryResult, Error> {
         let safe_limit = if limit < 1 { 100 } else { limit };
         let safe_offset = if offset < 0 { 0 } else { offset };
-        let safe_table = table.replace('\'', "''");
         match profile.driver {
             DbDriver::Mysql => {
+                let safe_table = table.replace('`', "``");
                 let sql = format!(
-                    "SELECT * FROM `{}` LIMIT {safe_limit} OFFSET {safe_offset}",
-                    safe_table.replace('`', "``")
+                    "SELECT * FROM `{safe_table}` LIMIT {safe_limit} OFFSET {safe_offset}"
                 );
                 Self::execute(profile, &sql).await
             }
             DbDriver::Postgres => {
+                let safe_table = table.replace('"', "\"\"");
                 let sql = format!(
-                    "SELECT * FROM \"{table}\" LIMIT {safe_limit} OFFSET {safe_offset}"
+                    "SELECT * FROM \"{safe_table}\" LIMIT {safe_limit} OFFSET {safe_offset}"
                 );
                 Self::execute(profile, &sql).await
             }

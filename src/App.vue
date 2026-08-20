@@ -26,30 +26,32 @@ const activeKey = computed(() => route.path);
 <template>
   <n-config-provider>
     <n-message-provider>
-      <n-layout has-sider style="height: 100%">
-        <n-layout-sider bordered :width="180">
-          <div class="logo">RunPHP</div>
-          <n-menu
-            :value="activeKey"
-            :options="
-              menuOptions.map((m) => ({
-                label: () =>
-                  h(RouterLink, { to: m.key }, { default: () => m.label }),
-                key: m.key,
-                icon: () => h(NIcon, null, { default: () => h(m.icon) }),
-              }))
-            "
-          />
-        </n-layout-sider>
-        <n-layout>
-          <n-layout-header bordered style="padding: 12px 20px; font-size: 16px; font-weight: 600;">
-            {{ String(route.meta.title ?? "") }}
-          </n-layout-header>
-          <n-layout-content content-style="padding: 20px;">
-            <RouterView />
-          </n-layout-content>
+      <n-dialog-provider>
+        <n-layout has-sider style="height: 100%">
+          <n-layout-sider bordered :width="180">
+            <div class="logo">RunPHP</div>
+            <n-menu
+              :value="activeKey"
+              :options="
+                menuOptions.map((m) => ({
+                  label: () =>
+                    h(RouterLink, { to: m.key }, { default: () => m.label }),
+                  key: m.key,
+                  icon: () => h(NIcon, null, { default: () => h(m.icon) }),
+                }))
+              "
+            />
+          </n-layout-sider>
+          <n-layout>
+            <n-layout-header bordered style="padding: 12px 20px; font-size: 16px; font-weight: 600;">
+              {{ String(route.meta.title ?? "") }}
+            </n-layout-header>
+            <n-layout-content content-style="padding: 20px;">
+              <RouterView />
+            </n-layout-content>
+          </n-layout>
         </n-layout>
-      </n-layout>
+      </n-dialog-provider>
     </n-message-provider>
   </n-config-provider>
 </template>

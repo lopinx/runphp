@@ -42,6 +42,9 @@ pub fn system_hosts_path() -> PathBuf {
 /// 解析 hosts 文件内容，提取受管区块内的条目。
 ///
 /// 返回 `(受管区块条目, 区块外原文)`。
+///
+/// 若存在 MARK_BEGIN 但缺少匹配的 MARK_END（文件损坏），将 BEGIN 之后
+/// 的内容视为受管区块处理，避免误将用户内容写入受管区块。
 pub fn parse(content: &str) -> (Vec<HostEntry>, String) {
     let mut in_block = false;
     let mut managed = Vec::new();
@@ -65,6 +68,8 @@ pub fn parse(content: &str) -> (Vec<HostEntry>, String) {
             outside.push('\n');
         }
     }
+    // 未闭合的受管区块：BEGIN 后内容已被当作受管处理，
+    // outside 中不包含这些行，sync 时会重新生成受管区块，安全。
     (managed, outside)
 }
 

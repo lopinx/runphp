@@ -39,7 +39,10 @@ pub async fn serve(
     host: &str,
     token: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let addr: SocketAddr = format!("{host}:{port}").parse()?;
+    let host_parsed: std::net::IpAddr = host
+        .parse()
+        .map_err(|_| Box::<dyn std::error::Error>::from(format!("无效的主机地址: {host}")))?;
+    let addr = SocketAddr::new(host_parsed, port);
     let has_token = token.is_some();
     let state = Arc::new(PanelState { cfg, token });
 
@@ -341,7 +344,7 @@ async fn site_add(State(s): S, Json(req): Json<SiteReq>) -> Response {
     if let Err(e) = reg.validate(&site, None) {
         return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
     }
-    site.touch();
+    // reg.add 内部会调用 site.touch()，无需手动重复
     reg.add(site);
     if let Err(e) = s.cfg.save_sites(&reg) {
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
@@ -485,7 +488,7 @@ async fn db_remote_remove(State(s): S, Json(req): Json<IdReq>) -> Response {
     }
 }
 
-async fn db_remote_test(State(_): State<Arc<PanelState>>, Json(req): Json<ProfileReq>) -> Response {
+async fn db_remote_test(Json(req): Json<ProfileReq>) -> Response {
     match RemoteDbManager::test_connection(&req.profile).await {
         Ok(msg) => Json(json!(msg)).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),

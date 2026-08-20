@@ -23,7 +23,8 @@ export const useAppStore = defineStore("app", {
   }),
 
   getters: {
-    defaultRuntime: (s) => s.runtimes.find((r) => r.is_default) ?? s.runtimes[0],
+    defaultRuntime: (s): RuntimeInfo | undefined =>
+      s.runtimes.find((r) => r.is_default) ?? s.runtimes[0],
     hasRuntime: (s) => s.runtimes.length > 0,
   },
 

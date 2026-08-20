@@ -101,7 +101,10 @@ impl RuntimeManager {
         if let Some(d) = installed.iter().find(|r| r.is_default) {
             return Ok(d.clone());
         }
-        Ok(installed.into_iter().next().unwrap())
+        installed
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::Runtime("运行时列表为空".into()))
     }
 
     /// 下载并安装指定版本。
@@ -227,12 +230,19 @@ fn set_executable(path: &Path) -> Result<()> {
 }
 
 /// 清理版本号，防止路径穿越。
-/// 仅允许字母、数字、点、连字符。
+///
+/// 仅允许字母、数字、点、连字符。若清理后为空（如输入全为特殊字符），
+/// 返回 `unknown` 作为兜底，避免版本目录退化为 runtimes 根目录。
 fn sanitize_version(version: &str) -> String {
-    version
+    let filtered: String = version
         .chars()
         .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-')
-        .collect()
+        .collect();
+    if filtered.is_empty() {
+        "unknown".to_string()
+    } else {
+        filtered
+    }
 }
 
 #[cfg(test)]
