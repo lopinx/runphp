@@ -35,6 +35,7 @@ const router = createRouter({
       component: () => import("../views/SettingsView.vue"),
       meta: { title: "设置" },
     },
+    { path: "/:pathMatch(.*)*", redirect: "/dashboard" },
   ],
 });
 

@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { h, onMounted, ref } from "vue";
+import { h, onMounted, onUnmounted, ref } from "vue";
 import { useAppStore } from "../stores/app";
 import { NButton, useMessage } from "naive-ui";
-import { listen } from "@tauri-apps/api/event";
-import { isDesktop, runtimeSetDefault } from "../api";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { isDesktop, runtimeSetDefault, type RuntimeInfo } from "../api";
 
 const store = useAppStore();
 const message = useMessage();
@@ -11,13 +11,13 @@ const message = useMessage();
 const installVersion = ref("1.12.7");
 const installing = ref(false);
 const downloadProgress = ref(0);
+let unlisten: UnlistenFn | null = null;
 
 onMounted(async () => {
   await store.refreshRuntimes();
-  // 监听下载进度事件（仅桌面端）
   if (isDesktop) {
     try {
-      await listen<[number, number]>(
+      unlisten = await listen<[number, number]>(
         "runtime-download-progress",
         (event) => {
           const [downloaded, total] = event.payload;
@@ -29,6 +29,10 @@ onMounted(async () => {
       console.warn("事件监听不可用", e);
     }
   }
+});
+
+onUnmounted(() => {
+  unlisten?.();
 });
 
 async function setDefault(version: string) {
@@ -48,9 +52,10 @@ async function install() {
   }
   installing.value = true;
   downloadProgress.value = 0;
+  const version = installVersion.value.trim();
   try {
-    await store.installRuntime(installVersion.value.trim());
-    message.success(`FrankenPHP v${installVersion.value} 安装成功`);
+    await store.installRuntime(version);
+    message.success(`FrankenPHP v${version} 安装成功`);
   } catch (e) {
     message.error(`安装失败：${e}`);
   } finally {
@@ -70,12 +75,12 @@ async function install() {
             {
               title: '默认',
               key: 'is_default',
-              render: (row: any) => (row.is_default ? '✅' : ''),
+              render: (row: RuntimeInfo) => (row.is_default ? '✅' : ''),
             },
             {
               title: '操作',
               key: 'actions',
-              render: (row: any) =>
+              render: (row: RuntimeInfo) =>
                 row.is_default
                   ? null
                   : h(

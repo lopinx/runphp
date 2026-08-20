@@ -2,8 +2,8 @@
 
 use runphp_core::{
     caddy,
-    db::{remote::*, sqlite::*, DatabaseFile},
-    db::remote::{RemoteDbManager, RemoteQueryResult, RemoteTableInfo},
+    db::remote::{ConnectionProfile, RemoteDbManager, RemoteQueryResult, RemoteTableInfo},
+    db::sqlite::{DatabaseFile, QueryResult, SqliteManager, TableInfo},
     hosts::{entries_from_sites, HostEntry, HostsManager},
     AppConfig, RuntimeManager, Site,
 };
@@ -63,7 +63,7 @@ fn site_add(mut site: Site) -> Result<(), String> {
     let cfg = cfg();
     let mut reg = cfg.load_sites().map_err(|e| e.to_string())?;
     reg.validate(&site, None).map_err(|e| e.to_string())?;
-    site.touch();
+    // reg.add 内部会调用 site.touch()，无需手动重复
     reg.add(site);
     cfg.save_sites(&reg).map_err(|e| e.to_string())?;
     caddy::write_caddyfile(&cfg, &reg.sites).map_err(|e| e.to_string())?;

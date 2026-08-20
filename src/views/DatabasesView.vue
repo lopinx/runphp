@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, computed, h } from "vue";
+import { onMounted, ref, h } from "vue";
 import { useMessage, useDialog, NButton } from "naive-ui";
 import {
   dbSqliteList,
@@ -47,12 +47,7 @@ const loadingQuery = ref(false);
 
 const activeDb = ref<ActiveDb | null>(null);
 
-const sqlPlaceholder = computed(() => {
-  if (!activeDb.value) return "输入 SQL 语句…";
-  return activeDb.value.kind === "sqlite"
-    ? "输入 SQL 语句…"
-    : "输入 SQL 语句（MySQL / PostgreSQL）…";
-});
+const sqlPlaceholder = "输入 SQL 语句…";
 
 // 远程连接部分
 const remoteProfiles = ref<ConnectionProfile[]>([]);
@@ -99,12 +94,19 @@ async function loadRemoteProfiles() {
   }
 }
 
+const showCreateSqlite = ref(false);
+const newSqliteName = ref("");
+
 async function createSqlite() {
-  const name = prompt("数据库名称：");
-  if (!name) return;
+  if (!newSqliteName.value.trim()) {
+    message.warning("请输入数据库名称");
+    return;
+  }
   try {
-    await dbSqliteCreate(name);
+    await dbSqliteCreate(newSqliteName.value.trim());
     message.success("数据库创建成功");
+    showCreateSqlite.value = false;
+    newSqliteName.value = "";
     await loadSqliteDbs();
   } catch (e) {
     message.error(`创建失败：${e}`);
@@ -151,7 +153,7 @@ async function selectRemoteDb(profile: ConnectionProfile) {
 }
 
 async function selectTable(table: string) {
-  if (!activeDb.value) return;
+  if (!activeDb.value || loadingQuery.value) return;
   selectedTable.value = table;
   loadingQuery.value = true;
   try {
@@ -175,20 +177,32 @@ async function runSql() {
     message.warning("请输入 SQL 语句");
     return;
   }
+  if (loadingQuery.value) return;
   loadingQuery.value = true;
+  const sql = sqlEditor.value;
   try {
     queryResult.value =
       activeDb.value.kind === "sqlite"
-        ? await dbSqliteExecute(activeDb.value.key, sqlEditor.value)
-        : await dbRemoteExecute(activeDb.value.profile!, sqlEditor.value);
+        ? await dbSqliteExecute(activeDb.value.key, sql)
+        : await dbRemoteExecute(activeDb.value.profile!, sql);
     message.success(`执行成功，影响 ${queryResult.value.affected} 行`);
-    // DDL 语句后刷新表列表
-    const upper = sqlEditor.value.trim().toUpperCase();
+    // DDL 语句后刷新表列表，但不清空 SQL 编辑器内容
+    const upper = sql.trim().toUpperCase();
     if (upper.startsWith("CREATE") || upper.startsWith("ALTER") || upper.startsWith("DROP")) {
-      if (activeDb.value.kind === "sqlite") {
-        await selectSqliteDb(activeDb.value.key);
-      } else if (activeDb.value.profile) {
-        await selectRemoteDb(activeDb.value.profile);
+      // 重新加载表列表而不重置编辑器
+      const currentActive = activeDb.value;
+      selectedTable.value = null;
+      queryResult.value = null;
+      loadingTables.value = true;
+      try {
+        tables.value =
+          currentActive.kind === "sqlite"
+            ? await dbSqliteTables(currentActive.key)
+            : await dbRemoteTables(currentActive.profile!);
+      } catch (e) {
+        message.error(`刷新表列表失败：${e}`);
+      } finally {
+        loadingTables.value = false;
       }
     }
   } catch (e) {
@@ -212,6 +226,7 @@ function confirmDeleteDb(name: string) {
           activeDb.value = null;
           tables.value = [];
           queryResult.value = null;
+          selectedTable.value = null;
         }
         await loadSqliteDbs();
       } catch (e) {
@@ -273,6 +288,7 @@ function confirmDeleteRemote(p: ConnectionProfile) {
           activeDb.value = null;
           tables.value = [];
           queryResult.value = null;
+          selectedTable.value = null;
         }
         await loadRemoteProfiles();
       } catch (e) {
@@ -293,9 +309,28 @@ onMounted(async () => {
     <n-card title="SQLite 数据库（内置）">
       <n-space vertical>
         <n-space align="center">
-          <n-button type="primary" @click="createSqlite">+ 新建数据库</n-button>
+          <n-button type="primary" @click="showCreateSqlite = true">+ 新建数据库</n-button>
           <n-button @click="loadSqliteDbs">刷新</n-button>
         </n-space>
+
+        <n-modal
+          v-model:show="showCreateSqlite"
+          preset="card"
+          title="新建 SQLite 数据库"
+          style="width: 400px"
+        >
+          <n-input
+            v-model:value="newSqliteName"
+            placeholder="数据库名称"
+            @keydown.enter="createSqlite"
+          />
+          <template #footer>
+            <n-space justify="end">
+              <n-button @click="showCreateSqlite = false">取消</n-button>
+              <n-button type="primary" @click="createSqlite">创建</n-button>
+            </n-space>
+          </template>
+        </n-modal>
 
         <n-layout has-sider style="height: 400px">
           <n-layout-sider :width="200" bordered content-style="padding: 8px;">
@@ -364,8 +399,8 @@ onMounted(async () => {
                     queryResult.columns.map((c) => ({
                       title: c,
                       key: c,
-                      render: (_: any, i: number) =>
-                        String(queryResult!.rows[i]?.[queryResult!.columns.indexOf(c)] ?? ''),
+                      render: (row: Record<string, unknown>) =>
+                        String(row[c] ?? ''),
                     }))
                   "
                   :data="queryResult.rows.map((r) => {
