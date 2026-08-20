@@ -99,6 +99,8 @@ pub async fn serve(
                 .allow_methods(tower_http::cors::Any)
                 .allow_headers(tower_http::cors::Any),
         )
+        // gzip 压缩静态资源（naive-ui chunk 1.3MB → ~350KB）
+        .layer(tower_http::compression::CompressionLayer::new().gzip(true))
         .with_state(state);
 
     tracing::info!("Web 面板启动: http://{addr}");

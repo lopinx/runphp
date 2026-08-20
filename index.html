@@ -4,6 +4,29 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>RunPHP - PHP 建站环境管理</title>
+    <style>
+      /* 内联骨架屏：JS 加载前立即显示加载动画，消除白屏 */
+      #app:empty {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+      }
+      #app:empty::after {
+        content: "";
+        width: 32px;
+        height: 32px;
+        border: 3px solid #e0e0e0;
+        border-top-color: #36ad6a;
+        border-radius: 50%;
+        animation: app-spin 0.7s linear infinite;
+      }
+      @keyframes app-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
   </head>
   <body>
     <div id="app"></div>
