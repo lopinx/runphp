@@ -3,7 +3,7 @@
 use runphp_core::{
     caddy,
     db::{remote::*, sqlite::*, DatabaseFile},
-    db::remote::RemoteDbManager,
+    db::remote::{RemoteDbManager, RemoteQueryResult, RemoteTableInfo},
     hosts::{entries_from_sites, HostEntry, HostsManager},
     AppConfig, RuntimeManager, Site,
 };
@@ -277,6 +277,37 @@ async fn db_remote_test(profile: ConnectionProfile) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
+/// 列出远程数据库的表。
+#[tauri::command]
+async fn db_remote_tables(profile: ConnectionProfile) -> Result<Vec<RemoteTableInfo>, String> {
+    RemoteDbManager::list_tables(&profile)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 查询远程表数据。
+#[tauri::command]
+async fn db_remote_query_table(
+    profile: ConnectionProfile,
+    table: String,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> Result<RemoteQueryResult, String> {
+    let lim = limit.unwrap_or(100);
+    let off = offset.unwrap_or(0);
+    RemoteDbManager::query_table(&profile, &table, lim, off)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 执行远程 SQL。
+#[tauri::command]
+async fn db_remote_execute(profile: ConnectionProfile, sql: String) -> Result<RemoteQueryResult, String> {
+    RemoteDbManager::execute(&profile, &sql)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 // 给前端的简化结构（路径转字符串）。
 #[derive(serde::Serialize)]
 struct RuntimeInfo {
@@ -318,6 +349,9 @@ pub fn run() {
             db_remote_add,
             db_remote_remove,
             db_remote_test,
+            db_remote_tables,
+            db_remote_query_table,
+            db_remote_execute,
         ])
         .run(tauri::generate_context!())
         .expect("运行 Tauri 应用时出错");

@@ -166,3 +166,14 @@ export const dbRemoteRemove = (id: string) =>
   call<void>("db_remote_remove", { id });
 export const dbRemoteTest = (profile: ConnectionProfile) =>
   call<string>("db_remote_test", { profile });
+export const dbRemoteTables = (profile: ConnectionProfile) =>
+  call<TableInfo[]>("db_remote_tables", { profile });
+export const dbRemoteQueryTable = (
+  profile: ConnectionProfile,
+  table: string,
+  limit?: number,
+  offset?: number,
+) =>
+  call<QueryResult>("db_remote_query_table", { profile, table, limit, offset });
+export const dbRemoteExecute = (profile: ConnectionProfile, sql: string) =>
+  call<QueryResult>("db_remote_execute", { profile, sql });

@@ -2,6 +2,7 @@
 //!
 //! 仅连接管理已有实例，不捆绑服务器。
 //! 连接档案（含密码）以 JSON 存储于数据目录。
+//! MySQL 与 PostgreSQL 支持表浏览与 SQL 执行；其余类型仅做连接测试。
 
 use crate::Error;
 use serde::{Deserialize, Serialize};
@@ -93,6 +94,53 @@ impl ConnectionProfile {
         }
         config
     }
+}
+
+/// 远程表结构信息（与 SQLite 的 TableInfo 字段对齐，便于前端复用）。
+#[derive(Debug, Clone, Serialize)]
+pub struct RemoteTableInfo {
+    pub name: String,
+    pub column_count: i64,
+    pub row_count: i64,
+}
+
+/// 远程查询结果（与 SQLite 的 QueryResult 字段对齐，便于前端复用）。
+#[derive(Debug, Clone, Serialize)]
+pub struct RemoteQueryResult {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<serde_json::Value>>,
+    pub affected: usize,
+}
+
+/// 将 mysql_async::Value 转为 serde_json::Value。
+fn mysql_value_to_json(v: mysql_async::Value) -> serde_json::Value {
+    use mysql_async::Value;
+    match v {
+        Value::NULL => serde_json::Value::Null,
+        Value::Int(n) => serde_json::Value::from(n),
+        Value::UInt(n) => serde_json::Value::from(n),
+        Value::Float(f) => {
+            serde_json::Value::from(f as f64)
+        }
+        Value::Double(f) => serde_json::Value::from(f),
+        Value::Bytes(b) => {
+            // 尝试 UTF-8 文本，否则显示占位
+            String::from_utf8(b)
+                .map(serde_json::Value::from)
+                .unwrap_or_else(|e| serde_json::Value::from(format!("[BLOB {} 字节]", e.into_bytes().len())))
+        }
+        Value::Date(..) | Value::Time(..) => {
+            serde_json::Value::from(v.as_sql(false))
+        }
+    }
+}
+
+/// 将 tokio-postgres 行值转为 serde_json::Value。
+///
+/// 使用 serde_json::Value 的 FromSql 实现（依赖 with-serde_json-1 feature），
+/// 失败时回退为 Null，避免单列类型不匹配导致整行查询失败。
+fn pg_value_to_json(row: &tokio_postgres::Row, idx: usize) -> serde_json::Value {
+    row.try_get::<usize, serde_json::Value>(idx).unwrap_or(serde_json::Value::Null)
 }
 
 /// 简单的 URL 转义（正确处理 UTF-8 多字节字符）。
@@ -281,6 +329,236 @@ impl RemoteDbManager {
                     )))
                 }
             }
+        }
+    }
+
+    /// 列出远程数据库中的所有表（仅支持 MySQL / PostgreSQL）。
+    pub async fn list_tables(profile: &ConnectionProfile) -> Result<Vec<RemoteTableInfo>, Error> {
+        match profile.driver {
+            DbDriver::Mysql => {
+                let opts = mysql_async::Opts::from_url(&profile.mysql_dsn())
+                    .map_err(|e| Error::Other(format!("MySQL 连接参数错误: {e}")))?;
+                let pool = mysql_async::Pool::new(opts);
+                let result = async {
+                    let mut conn = pool
+                        .get_conn()
+                        .await
+                        .map_err(|e| Error::Other(format!("MySQL 连接失败: {e}")))?;
+                    let db = profile.database.as_deref().unwrap_or("");
+                    if !db.is_empty() {
+                        conn.query::<mysql_async::Row, _>(
+                            format!("USE `{}`", db.replace('`', "``"))
+                        ).await.map_err(|e| Error::Other(format!("MySQL 切库失败: {e}")))?;
+                    }
+                    let rows: Vec<mysql_async::Row> = conn
+                        .query("SELECT table_name, table_rows FROM information_schema.tables WHERE table_schema = DATABASE() ORDER BY table_name")
+                        .await
+                        .map_err(|e| Error::Other(format!("MySQL 查询表失败: {e}")))?;
+                    let mut tables = Vec::new();
+                    for row in rows {
+                        let name: String = row.get(0).unwrap_or_default();
+                        let row_count: i64 = row.get(1).unwrap_or(0);
+                        let col_count: i64 = {
+                            let n = name.replace('\'', "''");
+                            conn.query_first::<(i64,), _>(
+                                format!("SELECT count(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = '{n}'")
+                            ).await
+                            .map_err(|e| Error::Other(format!("MySQL 查询列数失败: {e}")))?
+                            .map(|(c,)| c)
+                            .unwrap_or(0)
+                        };
+                        tables.push(RemoteTableInfo { name, column_count: col_count, row_count });
+                    }
+                    Ok::<Vec<RemoteTableInfo>, Error>(tables)
+                }
+                .await;
+                pool.disconnect().await.ok();
+                result
+            }
+            DbDriver::Postgres => {
+                let (client, connection) = profile
+                    .pg_config()
+                    .connect(tokio_postgres::NoTls)
+                    .await
+                    .map_err(|e| Error::Other(format!("PostgreSQL 连接失败: {e}")))?;
+                tokio::spawn(async move {
+                    let _ = connection.await;
+                });
+                let rows = client
+                    .query(
+                        "SELECT c.relname, COALESCE(s.n_live_tup, 0), count(a.attname)
+                         FROM pg_class c
+                         JOIN pg_namespace n ON n.oid = c.relnamespace
+                         LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
+                         LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+                         WHERE c.relkind = 'r' AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+                         GROUP BY c.relname, s.n_live_tup
+                         ORDER BY c.relname",
+                        &[],
+                    )
+                    .await
+                    .map_err(|e| Error::Other(format!("PostgreSQL 查询表失败: {e}")))?;
+                let mut tables = Vec::new();
+                for row in &rows {
+                    let name: String = row.get(0);
+                    let row_count: i64 = row.get(1);
+                    let column_count: i64 = row.get(2);
+                    tables.push(RemoteTableInfo { name, column_count, row_count });
+                }
+                Ok(tables)
+            }
+            _ => Err(Error::Other("该数据库类型不支持表浏览".into())),
+        }
+    }
+
+    /// 查询远程表数据（仅支持 MySQL / PostgreSQL）。
+    pub async fn query_table(
+        profile: &ConnectionProfile,
+        table: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<RemoteQueryResult, Error> {
+        let safe_limit = if limit < 1 { 100 } else { limit };
+        let safe_offset = if offset < 0 { 0 } else { offset };
+        let safe_table = table.replace('\'', "''");
+        match profile.driver {
+            DbDriver::Mysql => {
+                let sql = format!(
+                    "SELECT * FROM `{}` LIMIT {safe_limit} OFFSET {safe_offset}",
+                    safe_table.replace('`', "``")
+                );
+                Self::execute(profile, &sql).await
+            }
+            DbDriver::Postgres => {
+                let sql = format!(
+                    "SELECT * FROM \"{table}\" LIMIT {safe_limit} OFFSET {safe_offset}"
+                );
+                Self::execute(profile, &sql).await
+            }
+            _ => Err(Error::Other("该数据库类型不支持表浏览".into())),
+        }
+    }
+
+    /// 执行任意 SQL（仅支持 MySQL / PostgreSQL）。
+    pub async fn execute(
+        profile: &ConnectionProfile,
+        sql: &str,
+    ) -> Result<RemoteQueryResult, Error> {
+        let trimmed = sql.trim();
+        let upper = trimmed.to_uppercase();
+        let is_query = upper.starts_with("SELECT")
+            || upper.starts_with("WITH")
+            || upper.starts_with("SHOW")
+            || upper.starts_with("DESC")
+            || upper.starts_with("EXPLAIN")
+            || upper.starts_with("PRAGMA");
+
+        match profile.driver {
+            DbDriver::Mysql => {
+                let opts = mysql_async::Opts::from_url(&profile.mysql_dsn())
+                    .map_err(|e| Error::Other(format!("MySQL 连接参数错误: {e}")))?;
+                let pool = mysql_async::Pool::new(opts);
+                let result = async {
+                    let mut conn = pool
+                        .get_conn()
+                        .await
+                        .map_err(|e| Error::Other(format!("MySQL 连接失败: {e}")))?;
+                    let db = profile.database.as_deref().unwrap_or("");
+                    if !db.is_empty() {
+                        conn.query::<mysql_async::Row, _>(
+                            format!("USE `{}`", db.replace('`', "``"))
+                        ).await.map_err(|e| Error::Other(format!("MySQL 切库失败: {e}")))?;
+                    }
+                    if is_query {
+                        let mut result_set = conn
+                            .query_iter(trimmed)
+                            .await
+                            .map_err(|e| Error::Other(format!("MySQL 查询失败: {e}")))?;
+                        let cols: Vec<String> = result_set
+                            .columns_ref()
+                            .iter()
+                            .map(|c| c.name_str().to_string())
+                            .collect();
+                        let rows: Vec<mysql_async::Row> = result_set
+                            .collect()
+                            .await
+                            .map_err(|e| Error::Other(format!("MySQL 行读取失败: {e}")))?;
+                        let mut rows_out = Vec::new();
+                        for row in &rows {
+                            let values: Vec<serde_json::Value> = (0..cols.len())
+                                .map(|i| mysql_value_to_json(row.get(i).unwrap_or(mysql_async::Value::NULL)))
+                                .collect();
+                            rows_out.push(values);
+                        }
+                        let affected = rows_out.len();
+                        Ok::<RemoteQueryResult, Error>(RemoteQueryResult {
+                            columns: cols,
+                            rows: rows_out,
+                            affected,
+                        })
+                    } else {
+                        let mut result_set = conn
+                            .query_iter(trimmed)
+                            .await
+                            .map_err(|e| Error::Other(format!("MySQL 执行失败: {e}")))?;
+                        // 消费剩余行以避免连接状态错误
+                        let _: Vec<mysql_async::Row> = result_set.collect().await.map_err(|e| Error::Other(format!("MySQL 结果清理失败: {e}")))?;
+                        Ok(RemoteQueryResult {
+                            columns: vec![],
+                            rows: vec![],
+                            affected: result_set.affected_rows() as usize,
+                        })
+                    }
+                }
+                .await;
+                pool.disconnect().await.ok();
+                result
+            }
+            DbDriver::Postgres => {
+                let (client, connection) = profile
+                    .pg_config()
+                    .connect(tokio_postgres::NoTls)
+                    .await
+                    .map_err(|e| Error::Other(format!("PostgreSQL 连接失败: {e}")))?;
+                tokio::spawn(async move {
+                    let _ = connection.await;
+                });
+                if is_query {
+                    let stmt = client
+                        .prepare(trimmed)
+                        .await
+                        .map_err(|e| Error::Other(format!("PostgreSQL 预编译失败: {e}")))?;
+                    let cols: Vec<String> = stmt.columns().iter().map(|c| c.name().to_string()).collect();
+                    let rows = client
+                        .query(&stmt, &[])
+                        .await
+                        .map_err(|e| Error::Other(format!("PostgreSQL 查询失败: {e}")))?;
+                    let mut rows_out = Vec::new();
+                    for row in &rows {
+                        let values: Vec<serde_json::Value> = (0..cols.len())
+                            .map(|i| pg_value_to_json(row, i))
+                            .collect();
+                        rows_out.push(values);
+                    }
+                    let affected = rows_out.len();
+                    Ok(RemoteQueryResult {
+                        columns: cols,
+                        rows: rows_out,
+                        affected,
+                    })
+                } else {
+                    let affected = client
+                        .execute(trimmed, &[])
+                        .await
+                        .map_err(|e| Error::Other(format!("PostgreSQL 执行失败: {e}")))?;
+                    Ok(RemoteQueryResult {
+                        columns: vec![],
+                        rows: vec![],
+                        affected: affected as usize,
+                    })
+                }
+            }
+            _ => Err(Error::Other("该数据库类型不支持 SQL 执行".into())),
         }
     }
 }

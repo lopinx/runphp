@@ -12,6 +12,9 @@ import {
   dbRemoteAdd,
   dbRemoteRemove,
   dbRemoteTest,
+  dbRemoteTables,
+  dbRemoteQueryTable,
+  dbRemoteExecute,
   type DatabaseFile,
   type TableInfo,
   type QueryResult,
@@ -22,9 +25,19 @@ import {
 const message = useMessage();
 const dialog = useDialog();
 
+// ---- 共享类型 ----
+interface ActiveDb {
+  kind: "sqlite" | "remote";
+  /** SQLite 文件名或远程档案 id */
+  key: string;
+  /** 显示名 */
+  label: string;
+  /** 远程连接档案（仅 remote 模式） */
+  profile?: ConnectionProfile;
+}
+
 // SQLite 部分
 const sqliteDbs = ref<DatabaseFile[]>([]);
-const selectedDb = ref<string | null>(null);
 const tables = ref<TableInfo[]>([]);
 const selectedTable = ref<string | null>(null);
 const queryResult = ref<QueryResult | null>(null);
@@ -32,10 +45,20 @@ const sqlEditor = ref("SELECT * FROM sqlite_master WHERE type='table'");
 const loadingTables = ref(false);
 const loadingQuery = ref(false);
 
+const activeDb = ref<ActiveDb | null>(null);
+
+const sqlPlaceholder = computed(() => {
+  if (!activeDb.value) return "输入 SQL 语句…";
+  return activeDb.value.kind === "sqlite"
+    ? "输入 SQL 语句…"
+    : "输入 SQL 语句（MySQL / PostgreSQL）…";
+});
+
 // 远程连接部分
 const remoteProfiles = ref<ConnectionProfile[]>([]);
 const showAddRemote = ref(false);
 const testingId = ref<string | null>(null);
+const browsingId = ref<string | null>(null);
 const DEFAULT_PORTS: Record<DbDriver, number> = {
   mysql: 3306,
   postgres: 5432,
@@ -54,6 +77,11 @@ const newRemote = ref<ConnectionProfile>({
   database: null,
   created_at: "",
 });
+
+/** 可浏览的远程驱动（MySQL / PostgreSQL） */
+function isBrowsable(driver: DbDriver): boolean {
+  return driver === "mysql" || driver === "postgres";
+}
 
 async function loadSqliteDbs() {
   try {
@@ -83,10 +111,12 @@ async function createSqlite() {
   }
 }
 
-async function selectDb(name: string) {
-  selectedDb.value = name;
+/** 选择 SQLite 数据库，加载其表列表 */
+async function selectSqliteDb(name: string) {
+  activeDb.value = { kind: "sqlite", key: name, label: name };
   selectedTable.value = null;
   queryResult.value = null;
+  sqlEditor.value = "SELECT * FROM sqlite_master WHERE type='table'";
   loadingTables.value = true;
   try {
     tables.value = await dbSqliteTables(name);
@@ -97,12 +127,38 @@ async function selectDb(name: string) {
   }
 }
 
+/** 选择远程连接，加载其表列表 */
+async function selectRemoteDb(profile: ConnectionProfile) {
+  activeDb.value = {
+    kind: "remote",
+    key: profile.id,
+    label: profile.name,
+    profile,
+  };
+  selectedTable.value = null;
+  queryResult.value = null;
+  sqlEditor.value = "SELECT 1";
+  browsingId.value = profile.id;
+  loadingTables.value = true;
+  try {
+    tables.value = await dbRemoteTables(profile);
+  } catch (e) {
+    message.error(`加载表失败：${e}`);
+  } finally {
+    loadingTables.value = false;
+    browsingId.value = null;
+  }
+}
+
 async function selectTable(table: string) {
-  if (!selectedDb.value) return;
+  if (!activeDb.value) return;
   selectedTable.value = table;
   loadingQuery.value = true;
   try {
-    queryResult.value = await dbSqliteQueryTable(selectedDb.value, table, 100, 0);
+    queryResult.value =
+      activeDb.value.kind === "sqlite"
+        ? await dbSqliteQueryTable(activeDb.value.key, table, 100, 0)
+        : await dbRemoteQueryTable(activeDb.value.profile!, table, 100, 0);
   } catch (e) {
     message.error(`查询失败：${e}`);
   } finally {
@@ -111,7 +167,7 @@ async function selectTable(table: string) {
 }
 
 async function runSql() {
-  if (!selectedDb.value) {
+  if (!activeDb.value) {
     message.warning("请先选择数据库");
     return;
   }
@@ -121,12 +177,19 @@ async function runSql() {
   }
   loadingQuery.value = true;
   try {
-    queryResult.value = await dbSqliteExecute(selectedDb.value, sqlEditor.value);
+    queryResult.value =
+      activeDb.value.kind === "sqlite"
+        ? await dbSqliteExecute(activeDb.value.key, sqlEditor.value)
+        : await dbRemoteExecute(activeDb.value.profile!, sqlEditor.value);
     message.success(`执行成功，影响 ${queryResult.value.affected} 行`);
-    // DDL 语句（CREATE/ALTER/DROP）后刷新表列表
+    // DDL 语句后刷新表列表
     const upper = sqlEditor.value.trim().toUpperCase();
     if (upper.startsWith("CREATE") || upper.startsWith("ALTER") || upper.startsWith("DROP")) {
-      await selectDb(selectedDb.value);
+      if (activeDb.value.kind === "sqlite") {
+        await selectSqliteDb(activeDb.value.key);
+      } else if (activeDb.value.profile) {
+        await selectRemoteDb(activeDb.value.profile);
+      }
     }
   } catch (e) {
     message.error(`执行失败：${e}`);
@@ -145,8 +208,8 @@ function confirmDeleteDb(name: string) {
       try {
         await dbSqliteDelete(name);
         message.success("已删除");
-        if (selectedDb.value === name) {
-          selectedDb.value = null;
+        if (activeDb.value?.key === name) {
+          activeDb.value = null;
           tables.value = [];
           queryResult.value = null;
         }
@@ -167,7 +230,7 @@ async function addRemote() {
   }
   p.id = crypto.randomUUID();
   p.created_at = new Date().toISOString();
-  p.port = p.port || DEFAULT_PORTS[p.driver] ?? 3306;
+  p.port = p.port || (DEFAULT_PORTS[p.driver] ?? 3306);
   try {
     await dbRemoteAdd(p);
     message.success("连接档案已保存");
@@ -206,6 +269,11 @@ function confirmDeleteRemote(p: ConnectionProfile) {
       try {
         await dbRemoteRemove(p.id);
         message.success("已删除");
+        if (activeDb.value?.key === p.id) {
+          activeDb.value = null;
+          tables.value = [];
+          queryResult.value = null;
+        }
         await loadRemoteProfiles();
       } catch (e) {
         message.error(`删除失败：${e}`);
@@ -233,17 +301,17 @@ onMounted(async () => {
           <n-layout-sider :width="200" bordered content-style="padding: 8px;">
             <n-text depth="3" style="font-size: 12px">数据库列表</n-text>
             <n-menu
-              :value="selectedDb ?? undefined"
+              :value="activeDb?.kind === 'sqlite' ? activeDb.key : undefined"
               :options="
                 sqliteDbs.map((d) => ({
                   label: d.name,
                   key: d.name,
                 }))
              "
-              @update:value="selectDb"
+              @update:value="selectSqliteDb"
             />
           </n-layout-sider>
-          <n-layout-sider v-if="selectedDb" :width="180" bordered content-style="padding: 8px;">
+          <n-layout-sider v-if="activeDb" :width="180" bordered content-style="padding: 8px;">
             <n-text depth="3" style="font-size: 12px">表（{{ tables.length }}）</n-text>
             <n-spin :show="loadingTables">
               <n-menu
@@ -259,15 +327,15 @@ onMounted(async () => {
             </n-spin>
           </n-layout-sider>
           <n-layout content-style="padding: 12px;">
-            <n-space vertical v-if="selectedDb">
+            <n-space vertical v-if="activeDb">
               <n-text depth="3" style="font-size: 12px">
-                {{ selectedDb }} → {{ selectedTable ?? "SQL 编辑器" }}
+                {{ activeDb.label }} → {{ selectedTable ?? "SQL 编辑器" }}
               </n-text>
               <n-input
                 v-model:value="sqlEditor"
                 type="textarea"
                 :autosize="{ minRows: 3, maxRows: 6 }"
-                placeholder="输入 SQL 语句…"
+                :placeholder="sqlPlaceholder"
                 style="font-family: monospace"
               />
               <n-space>
@@ -275,11 +343,11 @@ onMounted(async () => {
                   执行 SQL
                 </n-button>
                 <n-button
-                  v-if="selectedDb"
+                  v-if="activeDb.kind === 'sqlite'"
                   quaternary
                   type="error"
                   size="small"
-                  @click="confirmDeleteDb(selectedDb)"
+                  @click="confirmDeleteDb(activeDb.key)"
                 >
                   删除此数据库
                 </n-button>
@@ -342,6 +410,13 @@ onMounted(async () => {
               render: (row: ConnectionProfile) =>
                 h('div', { style: 'display:flex; gap:8px' }, [
                   h(NButton, { size: 'small', loading: testingId === row.id, onClick: () => testRemote(row) } as Record<string, unknown>, () => '测试'),
+                  h(NButton, {
+                    size: 'small',
+                    type: 'info',
+                    loading: browsingId === row.id,
+                    disabled: !isBrowsable(row.driver),
+                    onClick: () => selectRemoteDb(row),
+                  } as Record<string, unknown>, () => '浏览'),
                   h(NButton, { size: 'small', type: 'error', onClick: () => confirmDeleteRemote(row) }, () => '删除'),
                 ]),
             },
