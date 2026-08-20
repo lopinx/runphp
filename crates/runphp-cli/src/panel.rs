@@ -72,7 +72,10 @@ pub async fn serve(
         .route("/db_remote_list", post(db_remote_list))
         .route("/db_remote_add", post(db_remote_add))
         .route("/db_remote_remove", post(db_remote_remove))
-        .route("/db_remote_test", post(db_remote_test));
+        .route("/db_remote_test", post(db_remote_test))
+        .route("/db_remote_tables", post(db_remote_tables))
+        .route("/db_remote_query_table", post(db_remote_query_table))
+        .route("/db_remote_execute", post(db_remote_execute));
 
     // 设置 token 时对 API 启用 Bearer 鉴权
     let api = if has_token {
@@ -205,6 +208,18 @@ struct ExecuteReq {
 #[derive(Deserialize)]
 struct ProfileReq {
     profile: ConnectionProfile,
+}
+#[derive(Deserialize)]
+struct RemoteQueryTableReq {
+    profile: ConnectionProfile,
+    table: String,
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+#[derive(Deserialize)]
+struct RemoteExecuteReq {
+    profile: ConnectionProfile,
+    sql: String,
 }
 
 type S = State<Arc<PanelState>>;
@@ -473,6 +488,29 @@ async fn db_remote_remove(State(s): S, Json(req): Json<IdReq>) -> Response {
 async fn db_remote_test(State(_): State<Arc<PanelState>>, Json(req): Json<ProfileReq>) -> Response {
     match RemoteDbManager::test_connection(&req.profile).await {
         Ok(msg) => Json(json!(msg)).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn db_remote_tables(Json(req): Json<ProfileReq>) -> Response {
+    match RemoteDbManager::list_tables(&req.profile).await {
+        Ok(t) => Json(json!(t)).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn db_remote_query_table(Json(req): Json<RemoteQueryTableReq>) -> Response {
+    let limit = req.limit.unwrap_or(100);
+    let offset = req.offset.unwrap_or(0);
+    match RemoteDbManager::query_table(&req.profile, &req.table, limit, offset).await {
+        Ok(r) => Json(json!(r)).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn db_remote_execute(Json(req): Json<RemoteExecuteReq>) -> Response {
+    match RemoteDbManager::execute(&req.profile, &req.sql).await {
+        Ok(r) => Json(json!(r)).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     }
 }
