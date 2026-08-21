@@ -3,6 +3,7 @@ import { h, computed, onMounted, ref } from "vue";
 import { RouterLink, RouterView, useRoute } from "vue-router";
 import { NIcon } from "naive-ui";
 import {
+  CloudUploadOutline,
   DesktopOutline,
   GlobeOutline,
   HomeOutline,
@@ -17,6 +18,7 @@ const menuOptions = [
   { label: "仪表盘", key: "/dashboard", icon: HomeOutline },
   { label: "站点", key: "/sites", icon: GlobeOutline },
   { label: "数据库", key: "/databases", icon: ServerOutline },
+  { label: "FTP", key: "/ftp", icon: CloudUploadOutline },
   { label: "Hosts", key: "/hosts", icon: DesktopOutline },
   { label: "设置", key: "/settings", icon: SettingsOutline },
 ];

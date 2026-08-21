@@ -40,6 +40,11 @@ enum Command {
         #[command(subcommand)]
         action: HostsCmd,
     },
+    /// FTP 管理（FTP/SFTP/FTPS）
+    Ftp {
+        #[command(subcommand)]
+        action: FtpCmd,
+    },
     /// 启动 FrankenPHP（前台运行）
     Run,
     /// 停止运行中的 FrankenPHP
@@ -110,6 +115,43 @@ enum HostsCmd {
     Sync,
     /// 显示提权命令（无写入权限时使用）
     Elevation,
+}
+
+#[derive(Subcommand)]
+enum FtpCmd {
+    /// 列出全部 FTP 连接档案
+    List,
+    /// 新增 FTP 连接档案
+    Add {
+        /// 显示名称
+        name: String,
+        /// 协议（ftp/sftp/ftps）
+        #[arg(long, default_value = "ftp")]
+        protocol: String,
+        /// 主机
+        #[arg(long)]
+        host: String,
+        /// 端口（默认按协议选择）
+        #[arg(long)]
+        port: Option<u16>,
+        /// 用户名
+        #[arg(long, default_value = "anonymous")]
+        username: String,
+        /// 密码
+        #[arg(long, default_value = "")]
+        password: String,
+        /// SSH 私钥路径（仅 SFTP）
+        #[arg(long)]
+        key: Option<String>,
+    },
+    /// 删除 FTP 连接档案
+    Rm {
+        id: String,
+    },
+    /// 测试 FTP 连接
+    Test {
+        id: String,
+    },
 }
 
 fn load_cfg(data_dir: Option<PathBuf>) -> AppConfig {
@@ -291,6 +333,76 @@ async fn main() {
                 HostsCmd::Elevation => {
                     println!("提权命令（复制到管理员终端执行）：");
                     println!("{}", hm.elevation_command("sync"));
+                }
+            }
+        }
+        Command::Ftp { action } => {
+            use runphp_core::ftp::{FtpManager, FtpProfile, FtpProtocol};
+            let mgr = FtpManager::new(&cfg.data_dir);
+            match action {
+                FtpCmd::List => {
+                    let profiles = mgr.list_profiles().unwrap_or_default();
+                    if profiles.is_empty() {
+                        println!("暂无 FTP 连接档案。使用 `runphp ftp add` 创建。");
+                    } else {
+                        for p in &profiles {
+                            println!("[{}] {} ({:?}) {}:{}", p.id, p.name, p.protocol, p.host, p.port);
+                        }
+                    }
+                }
+                FtpCmd::Add {
+                    name,
+                    protocol,
+                    host,
+                    port,
+                    username,
+                    password,
+                    key,
+                } => {
+                    let proto = match protocol.to_lowercase().as_str() {
+                        "sftp" => FtpProtocol::Sftp,
+                        "ftps" => FtpProtocol::Ftps,
+                        _ => FtpProtocol::Ftp,
+                    };
+                    let p = FtpProfile {
+                        username: username.clone(),
+                        password: password.clone(),
+                        ssh_key: key.clone(),
+                        ssh_password: None,
+                        ..FtpProfile::new(name, proto, host, port.unwrap_or(0))
+                    };
+                    match mgr.add_profile(p) {
+                        Ok(()) => println!("FTP 连接档案已保存。"),
+                        Err(e) => {
+                            eprintln!("保存失败: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                FtpCmd::Rm { id } => match mgr.remove_profile(&id) {
+                    Ok(()) => println!("已删除 FTP 连接档案: {id}"),
+                    Err(e) => {
+                        eprintln!("删除失败: {e}");
+                        std::process::exit(1);
+                    }
+                },
+                FtpCmd::Test { id } => {
+                    let profiles = mgr.list_profiles().unwrap_or_default();
+                    let p = match profiles.iter().find(|p| p.id == id) {
+                        Some(p) => p.clone(),
+                        None => {
+                            eprintln!("档案 {id} 不存在");
+                            std::process::exit(1);
+                        }
+                    };
+                    println!("测试连接 {:?} {}:{}…", p.protocol, p.host, p.port);
+                    match FtpManager::test_connection(&p).await {
+                        Ok(msg) => println!("{msg}"),
+                        Err(e) => {
+                            eprintln!("连接失败: {e}");
+                            std::process::exit(1);
+                        }
+                    }
                 }
             }
         }
