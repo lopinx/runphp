@@ -7,6 +7,7 @@ use runphp_core::{
     db::remote::{ConnectionProfile, RemoteDbManager, RemoteQueryResult, RemoteTableInfo},
     db::sqlite::{DatabaseFile, QueryResult, SqliteManager, TableInfo},
     detect::{self, LocalDetection},
+    ftp::{FtpEntry, FtpManager, FtpProfile},
     fs,
     hosts::{entries_from_sites, HostEntry, HostsManager},
     runtime::{self, ImportResult}, system, AppConfig, RuntimeManager, Site,
@@ -421,6 +422,104 @@ async fn db_libsql_execute(profile: LibsqlProfile, sql: String) -> Result<QueryR
         .map_err(|e| e.to_string())
 }
 
+// ---- FTP 管理 ----
+
+/// 列出 FTP 连接档案。
+#[tauri::command]
+fn ftp_list() -> Result<Vec<FtpProfile>, String> {
+    FtpManager::new(&cfg().data_dir)
+        .list_profiles()
+        .map_err(|e| e.to_string())
+}
+
+/// 添加 FTP 连接档案。
+#[tauri::command]
+fn ftp_add(profile: FtpProfile) -> Result<(), String> {
+    FtpManager::new(&cfg().data_dir)
+        .add_profile(profile)
+        .map_err(|e| e.to_string())
+}
+
+/// 删除 FTP 连接档案。
+#[tauri::command]
+fn ftp_remove(id: String) -> Result<(), String> {
+    FtpManager::new(&cfg().data_dir)
+        .remove_profile(&id)
+        .map_err(|e| e.to_string())
+}
+
+/// 测试 FTP 连接。
+#[tauri::command]
+async fn ftp_test(profile: FtpProfile) -> Result<String, String> {
+    FtpManager::test_connection(&profile)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 列出远程目录内容。
+#[tauri::command]
+async fn ftp_list_dir(profile: FtpProfile, path: String) -> Result<Vec<FtpEntry>, String> {
+    FtpManager::list_dir(&profile, &path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 上传本地文件到远程。
+#[tauri::command]
+async fn ftp_upload(
+    profile: FtpProfile,
+    local_path: String,
+    remote_path: String,
+) -> Result<(), String> {
+    FtpManager::upload(&profile, &local_path, &remote_path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 下载远程文件到本地。
+#[tauri::command]
+async fn ftp_download(
+    profile: FtpProfile,
+    remote_path: String,
+    local_path: String,
+) -> Result<(), String> {
+    FtpManager::download(&profile, &remote_path, &local_path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 删除远程文件或目录。
+#[tauri::command]
+async fn ftp_delete(
+    profile: FtpProfile,
+    path: String,
+    is_dir: bool,
+) -> Result<(), String> {
+    FtpManager::delete(&profile, &path, is_dir)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 创建远程目录。
+#[tauri::command]
+async fn ftp_mkdir(profile: FtpProfile, path: String) -> Result<(), String> {
+    FtpManager::make_dir(&profile, &path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 重命名远程文件或目录。
+#[tauri::command]
+async fn ftp_rename(
+    profile: FtpProfile,
+    from: String,
+    to: String,
+) -> Result<(), String> {
+    FtpManager::rename(&profile, &from, &to)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 // 给前端的简化结构（路径转字符串）。
 #[derive(serde::Serialize)]
 struct RuntimeInfo {
@@ -478,6 +577,16 @@ pub fn run() {
             db_libsql_tables,
             db_libsql_query_table,
             db_libsql_execute,
+            ftp_list,
+            ftp_add,
+            ftp_remove,
+            ftp_test,
+            ftp_list_dir,
+            ftp_upload,
+            ftp_download,
+            ftp_delete,
+            ftp_mkdir,
+            ftp_rename,
         ])
         .run(tauri::generate_context!())
         .expect("运行 Tauri 应用时出错");

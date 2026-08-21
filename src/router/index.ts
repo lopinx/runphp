@@ -24,6 +24,12 @@ const router = createRouter({
       meta: { title: "数据库" },
     },
     {
+      path: "/ftp",
+      name: "ftp",
+      component: () => import("../views/FtpView.vue"),
+      meta: { title: "FTP" },
+    },
+    {
       path: "/hosts",
       name: "hosts",
       component: () => import("../views/HostsView.vue"),

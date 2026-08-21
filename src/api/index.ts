@@ -279,3 +279,49 @@ export interface AdminerParams {
 }
 export const adminerManage = (params: AdminerParams) =>
   call<string>("adminer_manage", { ...params });
+
+// FTP 管理（FTP / SFTP / FTPS）
+export type FtpProtocol = "ftp" | "sftp" | "ftps";
+export interface FtpProfile {
+  id: string;
+  name: string;
+  protocol: FtpProtocol;
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  ssh_key: string | null;
+  ssh_password: string | null;
+  created_at: string;
+}
+export interface FtpEntry {
+  name: string;
+  is_dir: boolean;
+  size: number;
+  modified: string;
+}
+
+export const ftpList = () => call<FtpProfile[]>("ftp_list");
+export const ftpAdd = (profile: FtpProfile) =>
+  call<void>("ftp_add", { profile });
+export const ftpRemove = (id: string) => call<void>("ftp_remove", { id });
+export const ftpTest = (profile: FtpProfile) =>
+  call<string>("ftp_test", { profile });
+export const ftpListDir = (profile: FtpProfile, path: string) =>
+  call<FtpEntry[]>("ftp_list_dir", { profile, path });
+export const ftpUpload = (
+  profile: FtpProfile,
+  localPath: string,
+  remotePath: string,
+) => call<void>("ftp_upload", { profile, local_path: localPath, remote_path: remotePath });
+export const ftpDownload = (
+  profile: FtpProfile,
+  remotePath: string,
+  localPath: string,
+) => call<void>("ftp_download", { profile, remote_path: remotePath, local_path: localPath });
+export const ftpDelete = (profile: FtpProfile, path: string, isDir: boolean) =>
+  call<void>("ftp_delete", { profile, path, is_dir: isDir });
+export const ftpMkdir = (profile: FtpProfile, path: string) =>
+  call<void>("ftp_mkdir", { profile, path });
+export const ftpRename = (profile: FtpProfile, from: string, to: string) =>
+  call<void>("ftp_rename", { profile, from, to });

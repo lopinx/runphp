@@ -9,6 +9,7 @@ pub mod db;
 pub mod detect;
 pub mod error;
 pub mod fs;
+pub mod ftp;
 pub mod hosts;
 pub mod runtime;
 pub mod site;

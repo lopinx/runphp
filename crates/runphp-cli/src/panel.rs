@@ -21,6 +21,7 @@ use runphp_core::{
     db::{remote::*, sqlite::*, LibsqlManager, LibsqlProfile},
     detect,
     fs,
+    ftp::{FtpManager, FtpProfile},
     hosts::{entries_from_sites, HostsManager},
     runtime,
     system,
@@ -96,7 +97,17 @@ pub async fn serve(
         .route("/runtime_versions", post(runtime_versions))
         .route("/fs_browse", post(fs_browse))
         .route("/system_info", post(system_info))
-        .route("/adminer_manage", post(adminer_manage));
+        .route("/adminer_manage", post(adminer_manage))
+        .route("/ftp_list", post(ftp_list))
+        .route("/ftp_add", post(ftp_add))
+        .route("/ftp_remove", post(ftp_remove))
+        .route("/ftp_test", post(ftp_test))
+        .route("/ftp_list_dir", post(ftp_list_dir))
+        .route("/ftp_upload", post(ftp_upload))
+        .route("/ftp_download", post(ftp_download))
+        .route("/ftp_delete", post(ftp_delete))
+        .route("/ftp_mkdir", post(ftp_mkdir))
+        .route("/ftp_rename", post(ftp_rename));
 
     // 设置 token 时对 API 启用 Bearer 鉴权
     let api = if has_token {
@@ -263,6 +274,51 @@ struct LibsqlQueryTableReq {
 struct LibsqlExecuteReq {
     profile: LibsqlProfile,
     sql: String,
+}
+
+#[derive(Deserialize)]
+struct FtpProfileReq {
+    profile: FtpProfile,
+}
+
+#[derive(Deserialize)]
+struct FtpListDirReq {
+    profile: FtpProfile,
+    path: String,
+}
+
+#[derive(Deserialize)]
+struct FtpUploadReq {
+    profile: FtpProfile,
+    local_path: String,
+    remote_path: String,
+}
+
+#[derive(Deserialize)]
+struct FtpDownloadReq {
+    profile: FtpProfile,
+    remote_path: String,
+    local_path: String,
+}
+
+#[derive(Deserialize)]
+struct FtpDeleteReq {
+    profile: FtpProfile,
+    path: String,
+    is_dir: bool,
+}
+
+#[derive(Deserialize)]
+struct FtpMkdirReq {
+    profile: FtpProfile,
+    path: String,
+}
+
+#[derive(Deserialize)]
+struct FtpRenameReq {
+    profile: FtpProfile,
+    from: String,
+    to: String,
 }
 
 type S = State<Arc<PanelState>>;
@@ -669,6 +725,79 @@ async fn db_libsql_query_table(Json(req): Json<LibsqlQueryTableReq>) -> Response
 async fn db_libsql_execute(Json(req): Json<LibsqlExecuteReq>) -> Response {
     match LibsqlManager::execute(&req.profile, &req.sql).await {
         Ok(r) => Json(json!(r)).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+// ---- FTP 管理 ----
+
+async fn ftp_list(State(s): S) -> Json<Value> {
+    let mgr = FtpManager::new(&s.cfg.data_dir);
+    let profiles = mgr.list_profiles().unwrap_or_default();
+    Json(json!(profiles))
+}
+
+async fn ftp_add(State(s): S, Json(req): Json<FtpProfileReq>) -> Response {
+    let mgr = FtpManager::new(&s.cfg.data_dir);
+    match mgr.add_profile(req.profile) {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn ftp_remove(State(s): S, Json(req): Json<IdReq>) -> Response {
+    let mgr = FtpManager::new(&s.cfg.data_dir);
+    match mgr.remove_profile(&req.id) {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn ftp_test(Json(req): Json<FtpProfileReq>) -> Response {
+    match FtpManager::test_connection(&req.profile).await {
+        Ok(msg) => Json(json!(msg)).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn ftp_list_dir(Json(req): Json<FtpListDirReq>) -> Response {
+    match FtpManager::list_dir(&req.profile, &req.path).await {
+        Ok(entries) => Json(json!(entries)).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn ftp_upload(Json(req): Json<FtpUploadReq>) -> Response {
+    match FtpManager::upload(&req.profile, &req.local_path, &req.remote_path).await {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn ftp_download(Json(req): Json<FtpDownloadReq>) -> Response {
+    match FtpManager::download(&req.profile, &req.remote_path, &req.local_path).await {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn ftp_delete(Json(req): Json<FtpDeleteReq>) -> Response {
+    match FtpManager::delete(&req.profile, &req.path, req.is_dir).await {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn ftp_mkdir(Json(req): Json<FtpMkdirReq>) -> Response {
+    match FtpManager::make_dir(&req.profile, &req.path).await {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn ftp_rename(Json(req): Json<FtpRenameReq>) -> Response {
+    match FtpManager::rename(&req.profile, &req.from, &req.to).await {
+        Ok(()) => Json(Value::Null).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     }
 }
