@@ -25,6 +25,8 @@ const downloadProgress = ref(0);
 const detecting = ref(false);
 const detection = ref<LocalDetection | null>(null);
 const importing = ref<string | null>(null);
+// 本次会话中已成功导入的本地二进制路径（导入后托管路径变化，需单独记录）
+const importedPaths = ref<Set<string>>(new Set());
 let unlisten: UnlistenFn | null = null;
 
 onMounted(async () => {
@@ -91,13 +93,17 @@ async function detectLocal() {
 }
 
 function isImported(bin: DetectedBinary): boolean {
-  return store.runtimes.some((r) => r.path === bin.path);
+  return (
+    importedPaths.value.has(bin.path) ||
+    store.runtimes.some((r) => r.path === bin.path)
+  );
 }
 
 async function importLocal(bin: DetectedBinary) {
   importing.value = bin.path;
   try {
     const result = await runtimeImportLocal(bin.path);
+    importedPaths.value.add(bin.path);
     message.success(`已导入 FrankenPHP v${result.version}`);
     await store.refreshRuntimes();
   } catch (e) {

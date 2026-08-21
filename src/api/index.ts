@@ -199,26 +199,7 @@ export const dbRemoteQueryTable = (
 export const dbRemoteExecute = (profile: ConnectionProfile, sql: string) =>
   call<QueryResult>("db_remote_execute", { profile, sql });
 
-// 本地环境检测
-export interface DetectedBinary {
-  name: string;
-  path: string;
-}
-export interface DetectedService {
-  driver: DbDriver;
-  name: string;
-  host: string;
-  port: number;
-  running: boolean;
-}
-export interface LocalDetection {
-  frankenphp: DetectedBinary[];
-  services: DetectedService[];
-}
-export interface ImportResult {
-  path: string;
-  version: string;
-}
+// 本地环境检测（类型定义见上方 DetectedBinary / DetectedService / LocalDetection / ImportResult）
 export const runtimeDetectLocal = () =>
   call<LocalDetection>("runtime_detect_local");
 export const runtimeImportLocal = (path: string) =>

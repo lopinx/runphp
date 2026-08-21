@@ -129,14 +129,18 @@ impl RuntimeManager {
         let label = detect_version_label(source)
             .await
             .unwrap_or_else(|| "local".to_string());
+        let bin_path = self.binary_path(&label);
+        // 目标版本已存在（已下载或已导入）时直接复用，避免覆盖已有运行时
+        if bin_path.exists() {
+            return Ok(ImportResult {
+                path: bin_path,
+                version: label,
+            });
+        }
         let dest_dir = self.version_dir(&label);
         std::fs::create_dir_all(&dest_dir)?;
-        let bin_path = self.binary_path(&label);
-        // 源文件已在托管目录内时无需复制
-        if source != bin_path {
-            std::fs::copy(source, &bin_path)?;
-            set_executable(&bin_path)?;
-        }
+        std::fs::copy(source, &bin_path)?;
+        set_executable(&bin_path)?;
         tracing::info!("已导入本地运行时 {label}: {}", bin_path.display());
         Ok(ImportResult {
             path: bin_path,
