@@ -2,6 +2,10 @@
 import { ref, watch } from "vue";
 import { fsBrowse, type DirListing } from "../api";
 
+const props = withDefaults(
+  defineProps<{ mode?: "dir" | "file"; show?: boolean }>(),
+  { mode: "dir", show: false },
+);
 const show = defineModel<boolean>("show", { default: false });
 const emit = defineEmits<{ (e: "select", path: string): void }>();
 
@@ -9,9 +13,12 @@ const listing = ref<DirListing | null>(null);
 const loading = ref(false);
 const manual = ref("");
 
-watch(show, (v) => {
-  if (v) void browse(null);
-});
+watch(
+  () => show.value,
+  (v) => {
+    if (v) void browse(null);
+  },
+);
 
 async function browse(path: string | null) {
   loading.value = true;
@@ -33,6 +40,12 @@ function jump() {
   if (p) void browse(p);
 }
 
+/** 选文件模式下：点击文件直接选中；选目录模式下：选当前目录 */
+function pickFile(file: { name: string; path: string }) {
+  emit("select", file.path);
+  show.value = false;
+}
+
 function pick() {
   if (listing.value?.current) {
     emit("select", listing.value.current);
@@ -45,7 +58,7 @@ function pick() {
   <n-modal
     v-model:show="show"
     preset="card"
-    title="选择目录"
+    :title="props.mode === 'file' ? '选择文件' : '选择目录'"
     style="width: 560px"
   >
     <n-space vertical>
@@ -74,17 +87,31 @@ function pick() {
           <div
             v-for="d in listing?.dirs ?? []"
             :key="d.path"
-            class="dir-row"
+            class="entry-row"
             @click="browse(d.path)"
           >
             📁 {{ d.name }}
           </div>
+          <template v-if="props.mode === 'file'">
+            <div
+              v-for="f in listing?.files ?? []"
+              :key="f.path"
+              class="entry-row file-row"
+              @click="pickFile(f)"
+            >
+              📄 {{ f.name }}
+            </div>
+          </template>
           <n-text
-            v-if="!loading && (listing?.dirs.length ?? 0) === 0"
+            v-if="
+              !loading &&
+              (listing?.dirs.length ?? 0) === 0 &&
+              (listing?.files.length ?? 0) === 0
+            "
             depth="3"
             style="display: block; padding: 12px"
           >
-            （无子目录）
+            （空目录）
           </n-text>
         </div>
       </n-spin>
@@ -97,7 +124,12 @@ function pick() {
     <template #footer>
       <n-space justify="end">
         <n-button @click="show = false">取消</n-button>
-        <n-button type="primary" :disabled="!listing?.current" @click="pick">
+        <n-button
+          v-if="props.mode === 'dir'"
+          type="primary"
+          :disabled="!listing?.current"
+          @click="pick"
+        >
           选择当前目录
         </n-button>
       </n-space>
@@ -106,11 +138,14 @@ function pick() {
 </template>
 
 <style scoped>
-.dir-row {
+.entry-row {
   padding: 6px 12px;
   cursor: pointer;
 }
-.dir-row:hover {
+.entry-row:hover {
   background: rgba(128, 128, 128, 0.12);
+}
+.file-row:hover {
+  background: rgba(24, 160, 88, 0.12);
 }
 </style>

@@ -253,6 +253,7 @@ export interface DirListing {
   current: string;
   parent: string | null;
   dirs: DirEntry[];
+  files: DirEntry[];
 }
 export const fsBrowse = (path?: string) =>
   call<DirListing>("fs_browse", { path: path ?? null });
@@ -304,6 +305,8 @@ export interface FtpEntry {
 export const ftpList = () => call<FtpProfile[]>("ftp_list");
 export const ftpAdd = (profile: FtpProfile) =>
   call<void>("ftp_add", { profile });
+export const ftpUpdate = (profile: FtpProfile) =>
+  call<void>("ftp_update", { profile });
 export const ftpRemove = (id: string) => call<void>("ftp_remove", { id });
 export const ftpTest = (profile: FtpProfile) =>
   call<string>("ftp_test", { profile });
@@ -325,3 +328,29 @@ export const ftpMkdir = (profile: FtpProfile, path: string) =>
   call<void>("ftp_mkdir", { profile, path });
 export const ftpRename = (profile: FtpProfile, from: string, to: string) =>
   call<void>("ftp_rename", { profile, from, to });
+export const ftpUploadDir = (
+  profile: FtpProfile,
+  localDir: string,
+  remoteDir: string,
+) => call<void>("ftp_upload_dir", { profile, local_dir: localDir, remote_dir: remoteDir });
+
+/** FTP 进度事件 payload。 */
+export interface FtpProgressPayload {
+  transferred: number;
+  total: number;
+  file: string;
+}
+
+/** 监听 FTP 上传/下载进度事件。桌面端走 Tauri listen，面板端返回 no-op unlisten。 */
+export async function onFtpProgress(
+  event: "upload" | "download",
+  cb: (p: FtpProgressPayload) => void,
+): Promise<() => void> {
+  if (isDesktop) {
+    const { listen } = await import("@tauri-apps/api/event");
+    const eventName = event === "upload" ? "ftp-upload-progress" : "ftp-download-progress";
+    const unlisten = await listen<FtpProgressPayload>(eventName, (e) => cb(e.payload));
+    return unlisten;
+  }
+  return () => {};
+}

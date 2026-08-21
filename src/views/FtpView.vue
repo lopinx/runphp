@@ -1,18 +1,21 @@
 <script setup lang="ts">
-import { onMounted, ref, computed, h } from "vue";
-import { useMessage, useDialog, NButton, NTag } from "naive-ui";
+import { onMounted, ref, computed, h, onUnmounted } from "vue";
+import { useMessage, useDialog, NButton } from "naive-ui";
 import DirectoryPicker from "../components/DirectoryPicker.vue";
 import {
   ftpList,
   ftpAdd,
+  ftpUpdate,
   ftpRemove,
   ftpTest,
   ftpListDir,
   ftpUpload,
+  ftpUploadDir,
   ftpDownload,
   ftpDelete,
   ftpMkdir,
   ftpRename,
+  onFtpProgress,
   type FtpProfile,
   type FtpProtocol,
   type FtpEntry,
@@ -78,12 +81,21 @@ function blankProfile(protocol: FtpProtocol = "ftp"): FtpProfile {
   };
 }
 
-// ---- 添加/测试/删除 ----
+// ---- 添加/编辑/测试/删除 ----
 const showAdd = ref(false);
 const addForm = ref<FtpProfile>(blankProfile());
+const editing = ref<FtpProfile | null>(null);
+const isEdit = computed(() => !!editing.value);
 
 function openAdd() {
   addForm.value = blankProfile();
+  editing.value = null;
+  showAdd.value = true;
+}
+
+function openEdit(p: FtpProfile) {
+  addForm.value = { ...p };
+  editing.value = p;
   showAdd.value = true;
 }
 
@@ -91,17 +103,22 @@ function onProtocolChange(v: FtpProtocol) {
   addForm.value.port = DEFAULT_PORTS[v];
 }
 
-async function submitAdd() {
+async function submitProfile() {
   const p = addForm.value;
   if (!p.name.trim() || !p.host.trim()) {
     message.warning("请填写名称和主机");
     return;
   }
-  p.id = crypto.randomUUID();
-  p.created_at = new Date().toISOString();
   try {
-    await ftpAdd(p);
-    message.success("连接档案已保存");
+    if (isEdit.value) {
+      await ftpUpdate(p);
+      message.success("连接档案已更新");
+    } else {
+      p.id = crypto.randomUUID();
+      p.created_at = new Date().toISOString();
+      await ftpAdd(p);
+      message.success("连接档案已保存");
+    }
     showAdd.value = false;
     await loadProfiles();
   } catch (e) {
@@ -295,13 +312,37 @@ async function deleteEntry(row: FtpEntry) {
   });
 }
 
-// ---- 上传/下载（本地路径选择） ----
+// ---- 上传/下载（本地路径选择 + 进度） ----
 const showLocalPicker = ref(false);
-const pickerMode = ref<"upload" | "download">("upload");
+const pickerMode = ref<"upload" | "uploadDir" | "download">("upload");
+const pickerFileMode = computed(() => pickerMode.value !== "download");
 const pendingRemotePath = ref<string>("");
+
+/** 进度状态：active 为 false 时不显示进度条 */
+const progress = ref({
+  active: false,
+  file: "",
+  transferred: 0,
+  total: 0,
+});
+const progressPct = computed(() =>
+  progress.value.total > 0
+    ? Math.min(100, Math.round((progress.value.transferred / progress.value.total) * 100))
+    : 0,
+);
+let unlistenProgress: (() => void) | null = null;
+
+onUnmounted(() => {
+  unlistenProgress?.();
+});
 
 function openUpload() {
   pickerMode.value = "upload";
+  showLocalPicker.value = true;
+}
+
+function openUploadDir() {
+  pickerMode.value = "uploadDir";
   showLocalPicker.value = true;
 }
 
@@ -311,24 +352,64 @@ function onPickLocal(localPath: string) {
   const base = currentPath.value.endsWith("/")
     ? currentPath.value
     : currentPath.value + "/";
-  const fileName = localPath.split(/[\\/]/).pop() ?? "upload.bin";
-  const remotePath = (base + fileName).replace(/\/+/g, "/");
   if (pickerMode.value === "upload") {
+    const fileName = localPath.split(/[\\/]/).pop() ?? "upload.bin";
+    const remotePath = (base + fileName).replace(/\/+/g, "/");
     void doUpload(localPath, remotePath);
+  } else if (pickerMode.value === "uploadDir") {
+    const dirName = localPath.split(/[\\/]/).pop() ?? "upload_dir";
+    const remoteDir = (base + dirName).replace(/\/+/g, "/");
+    void doUploadDir(localPath, remoteDir);
   } else {
     void doDownload(pendingRemotePath.value, localPath);
   }
 }
 
+async function startProgressListen(event: "upload" | "download") {
+  unlistenProgress?.();
+  unlistenProgress = await onFtpProgress(event, (p) => {
+    progress.value = {
+      active: true,
+      file: p.file,
+      transferred: p.transferred,
+      total: p.total,
+    };
+  });
+}
+
+function stopProgressListen() {
+  unlistenProgress?.();
+  unlistenProgress = null;
+  progress.value.active = false;
+}
+
 async function doUpload(localPath: string, remotePath: string) {
   if (!activeProfile.value) return;
-  message.info("开始上传…");
+  progress.value = { active: true, file: "", transferred: 0, total: 0 };
+  await startProgressListen("upload");
   try {
     await ftpUpload(activeProfile.value, localPath, remotePath);
     message.success("上传成功");
     await loadDir();
   } catch (e) {
     message.error(`上传失败：${e}`);
+  } finally {
+    stopProgressListen();
+  }
+}
+
+async function doUploadDir(localDir: string, remoteDir: string) {
+  if (!activeProfile.value) return;
+  progress.value = { active: true, file: "", transferred: 0, total: 0 };
+  await startProgressListen("upload");
+  try {
+    await ftpUploadDir(activeProfile.value, localDir, remoteDir);
+    message.success("文件夹上传完成");
+    await loadDir();
+  } catch (e) {
+    message.error(`上传失败：${e}`);
+  } finally {
+    stopProgressListen();
   }
 }
 
@@ -344,9 +425,9 @@ function startDownload(row: FtpEntry) {
 
 async function doDownload(remotePath: string, localPath: string) {
   if (!activeProfile.value) return;
-  message.info("开始下载…");
+  progress.value = { active: true, file: "", transferred: 0, total: 0 };
+  await startProgressListen("download");
   try {
-    // 本地路径是目录，拼接文件名
     const fileName = remotePath.split("/").pop() ?? "download.bin";
     const localFile = localPath.endsWith("\\") || localPath.endsWith("/")
       ? localPath + fileName
@@ -355,6 +436,8 @@ async function doDownload(remotePath: string, localPath: string) {
     message.success("下载成功");
   } catch (e) {
     message.error(`下载失败：${e}`);
+  } finally {
+    stopProgressListen();
   }
 }
 </script>
@@ -383,6 +466,12 @@ async function doDownload(remotePath: string, localPath: string) {
           @click="testActive"
         >
           测试连接
+        </n-button>
+        <n-button
+          v-if="activeProfile"
+          @click="openEdit(activeProfile)"
+        >
+          编辑连接
         </n-button>
         <n-button
           v-if="activeProfile"
@@ -415,9 +504,27 @@ async function doDownload(remotePath: string, localPath: string) {
             <n-button size="small" type="primary" @click="openUpload">
               上传
             </n-button>
+            <n-button size="small" @click="openUploadDir">
+              上传文件夹
+            </n-button>
             <n-button size="small" @click="openMkdir">新建文件夹</n-button>
           </n-space>
         </n-space>
+
+        <!-- 上传/下载进度条 -->
+        <div v-if="progress.active" style="margin-bottom: 8px">
+          <n-space align="center" :wrap="false">
+            <n-text depth="3" style="font-size: 12px; white-space: nowrap">
+              {{ progress.file || "传输中…" }}
+            </n-text>
+            <n-progress
+              type="line"
+              :percentage="progressPct"
+              :show-indicator="progress.total > 0"
+              style="min-width: 200px"
+            />
+          </n-space>
+        </div>
 
         <!-- 文件列表 -->
         <n-data-table
@@ -481,8 +588,8 @@ async function doDownload(remotePath: string, localPath: string) {
       <n-empty v-else description="选择或添加一个连接以开始管理文件" />
     </n-card>
 
-    <!-- 添加连接弹窗 -->
-    <n-modal v-model:show="showAdd" preset="card" title="添加 FTP 连接" style="width: 520px">
+    <!-- 添加/编辑连接弹窗 -->
+    <n-modal v-model:show="showAdd" preset="card" :title="isEdit ? '编辑 FTP 连接' : '添加 FTP 连接'" style="width: 520px">
       <n-form label-placement="left" label-width="80">
         <n-form-item label="名称">
           <n-input v-model:value="addForm.name" placeholder="如：生产服务器" />
@@ -521,7 +628,7 @@ async function doDownload(remotePath: string, localPath: string) {
       <template #footer>
         <n-space justify="end">
           <n-button @click="showAdd = false">取消</n-button>
-          <n-button type="primary" @click="submitAdd">保存</n-button>
+          <n-button type="primary" @click="submitProfile">{{ isEdit ? "保存" : "添加" }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -538,6 +645,10 @@ async function doDownload(remotePath: string, localPath: string) {
     </n-modal>
 
     <!-- 本地目录选择器（上传源/下载目标） -->
-    <DirectoryPicker v-model:show="showLocalPicker" @select="onPickLocal" />
+    <DirectoryPicker
+      v-model:show="showLocalPicker"
+      :mode="pickerFileMode ? 'file' : 'dir'"
+      @select="onPickLocal"
+    />
   </n-space>
 </template>
