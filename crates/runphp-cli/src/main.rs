@@ -6,7 +6,9 @@
 mod panel;
 
 use clap::{Parser, Subcommand};
-use runphp_core::{caddy, AppConfig, RuntimeManager, Site};
+use runphp_core::{
+    caddy, ftp::FtpProfile, AppConfig, RuntimeManager, Site,
+};
 use std::path::PathBuf;
 
 /// RunPHP —— 基于 FrankenPHP 的 PHP 建站环境管理工具
@@ -152,6 +154,123 @@ enum FtpCmd {
     Test {
         id: String,
     },
+    /// 列出远程目录内容
+    Ls {
+        /// 档案 id
+        id: String,
+        /// 远程路径（默认 "/"）
+        #[arg(long, default_value = "/")]
+        path: String,
+    },
+    /// 在远程创建目录
+    Mkdir {
+        id: String,
+        /// 远程目录路径
+        #[arg(long)]
+        path: String,
+    },
+    /// 上传本地文件到远程
+    Upload {
+        id: String,
+        /// 本地文件路径
+        #[arg(long)]
+        local: PathBuf,
+        /// 远程目标路径
+        #[arg(long)]
+        remote: String,
+    },
+    /// 下载远程文件到本地
+    Download {
+        id: String,
+        /// 远程文件路径
+        #[arg(long)]
+        remote: String,
+        /// 本地保存路径
+        #[arg(long)]
+        local: PathBuf,
+    },
+    /// 递归上传本地目录到远程
+    UploadDir {
+        id: String,
+        /// 本地目录路径
+        #[arg(long)]
+        local: PathBuf,
+        /// 远程目标目录
+        #[arg(long)]
+        remote: String,
+    },
+    /// 删除远程文件或目录
+    Rmfile {
+        id: String,
+        /// 远程路径
+        #[arg(long)]
+        path: String,
+        /// 目标为目录
+        #[arg(long)]
+        dir: bool,
+    },
+    /// 重命名远程文件或目录
+    Rename {
+        id: String,
+        /// 原路径
+        #[arg(long)]
+        from: String,
+        /// 新路径
+        #[arg(long)]
+        to: String,
+    },
+}
+
+/// 按档案 id 查找 profile，不存在则报错退出。
+fn profile_by_id(mgr: &runphp_core::ftp::FtpManager, id: &str) -> FtpProfile {
+    match mgr.list_profiles() {
+        Ok(list) => list.into_iter().find(|p| p.id == id).unwrap_or_else(|| {
+            eprintln!("档案 {id} 不存在");
+            std::process::exit(1);
+        }),
+        Err(e) => {
+            eprintln!("读取档案失败: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// 字节数转人类可读字符串（如 1.2 MB）。
+fn fmt_size(n: u64) -> String {
+    if n == 0 {
+        return "—".into();
+    }
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < UNITS.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{} {}", n, UNITS[0])
+    } else if v >= 100.0 {
+        format!("{:.0} {}", v, UNITS[i])
+    } else {
+        format!("{:.1} {}", v, UNITS[i])
+    }
+}
+
+/// 终端进度显示：覆盖当前行显示文件名、已传/总量、百分比。
+fn print_progress(transferred: u64, total: u64, file: &str) {
+    use std::io::Write;
+    let pct = if total > 0 {
+        (transferred * 100 / total).min(100)
+    } else {
+        0
+    };
+    let line = if total > 0 {
+        format!("\r{file}  {pct}%  {}/{}", fmt_size(transferred), fmt_size(total))
+    } else {
+        format!("\r{file}  {}", fmt_size(transferred))
+    };
+    print!("{line}");
+    std::io::stdout().flush().ok();
 }
 
 fn load_cfg(data_dir: Option<PathBuf>) -> AppConfig {
@@ -337,7 +456,7 @@ async fn main() {
             }
         }
         Command::Ftp { action } => {
-            use runphp_core::ftp::{FtpManager, FtpProfile, FtpProtocol};
+            use runphp_core::ftp::{FtpManager, FtpProtocol};
             let mgr = FtpManager::new(&cfg.data_dir);
             match action {
                 FtpCmd::List => {
@@ -400,6 +519,109 @@ async fn main() {
                         Ok(msg) => println!("{msg}"),
                         Err(e) => {
                             eprintln!("连接失败: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                FtpCmd::Ls { id, path } => {
+                    let p = profile_by_id(&mgr, &id);
+                    match FtpManager::list_dir(&p, &path).await {
+                        Ok(entries) => {
+                            if entries.is_empty() {
+                                println!("（空目录）");
+                            }
+                            for e in &entries {
+                                let kind = if e.is_dir { "目录" } else { "文件" };
+                                println!("{kind}\t{}\t{}", e.name, fmt_size(e.size));
+                            }
+                            println!("共 {} 项", entries.len());
+                        }
+                        Err(e) => {
+                            eprintln!("列目录失败: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                FtpCmd::Mkdir { id, path } => {
+                    let p = profile_by_id(&mgr, &id);
+                    match FtpManager::make_dir(&p, &path).await {
+                        Ok(()) => println!("已创建目录: {path}"),
+                        Err(e) => {
+                            eprintln!("创建目录失败: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                FtpCmd::Upload { id, local, remote } => {
+                    let p = profile_by_id(&mgr, &id);
+                    println!("上传 {local:?} → {remote} …");
+                    match FtpManager::upload(
+                        &p,
+                        &local.to_string_lossy(),
+                        &remote,
+                        Some(&|d, t, f| print_progress(d, t, f)),
+                    )
+                    .await
+                    {
+                        Ok(()) => { println!(); println!("上传完成"); }
+                        Err(e) => {
+                            eprintln!("\n上传失败: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                FtpCmd::Download { id, remote, local } => {
+                    let p = profile_by_id(&mgr, &id);
+                    println!("下载 {remote} → {local:?} …");
+                    match FtpManager::download(
+                        &p,
+                        &remote,
+                        &local.to_string_lossy(),
+                        Some(&|d, t, f| print_progress(d, t, f)),
+                    )
+                    .await
+                    {
+                        Ok(()) => { println!(); println!("下载完成"); }
+                        Err(e) => {
+                            eprintln!("\n下载失败: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                FtpCmd::UploadDir { id, local, remote } => {
+                    let p = profile_by_id(&mgr, &id);
+                    println!("递归上传 {local:?} → {remote} …");
+                    match FtpManager::upload_dir(
+                        &p,
+                        &local.to_string_lossy(),
+                        &remote,
+                        Some(&|d, t, f| print_progress(d, t, f)),
+                    )
+                    .await
+                    {
+                        Ok(()) => { println!(); println!("目录上传完成"); }
+                        Err(e) => {
+                            eprintln!("\n上传失败: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                FtpCmd::Rmfile { id, path, dir } => {
+                    let p = profile_by_id(&mgr, &id);
+                    match FtpManager::delete(&p, &path, dir).await {
+                        Ok(()) => println!("已删除: {path}"),
+                        Err(e) => {
+                            eprintln!("删除失败: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                FtpCmd::Rename { id, from, to } => {
+                    let p = profile_by_id(&mgr, &id);
+                    match FtpManager::rename(&p, &from, &to).await {
+                        Ok(()) => println!("已重命名: {from} → {to}"),
+                        Err(e) => {
+                            eprintln!("重命名失败: {e}");
                             std::process::exit(1);
                         }
                     }

@@ -105,9 +105,11 @@ pub async fn serve(
         .route("/ftp_list_dir", post(ftp_list_dir))
         .route("/ftp_upload", post(ftp_upload))
         .route("/ftp_download", post(ftp_download))
+        .route("/ftp_upload_dir", post(ftp_upload_dir))
         .route("/ftp_delete", post(ftp_delete))
         .route("/ftp_mkdir", post(ftp_mkdir))
-        .route("/ftp_rename", post(ftp_rename));
+        .route("/ftp_rename", post(ftp_rename))
+        .route("/ftp_update", post(ftp_update));
 
     // 设置 token 时对 API 启用 Bearer 鉴权
     let api = if has_token {
@@ -299,6 +301,13 @@ struct FtpDownloadReq {
     profile: FtpProfile,
     remote_path: String,
     local_path: String,
+}
+
+#[derive(Deserialize)]
+struct FtpUploadDirReq {
+    profile: FtpProfile,
+    local_dir: String,
+    remote_dir: String,
 }
 
 #[derive(Deserialize)]
@@ -745,6 +754,14 @@ async fn ftp_add(State(s): S, Json(req): Json<FtpProfileReq>) -> Response {
     }
 }
 
+async fn ftp_update(State(s): S, Json(req): Json<FtpProfileReq>) -> Response {
+    let mgr = FtpManager::new(&s.cfg.data_dir);
+    match mgr.update_profile(req.profile) {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
 async fn ftp_remove(State(s): S, Json(req): Json<IdReq>) -> Response {
     let mgr = FtpManager::new(&s.cfg.data_dir);
     match mgr.remove_profile(&req.id) {
@@ -768,14 +785,21 @@ async fn ftp_list_dir(Json(req): Json<FtpListDirReq>) -> Response {
 }
 
 async fn ftp_upload(Json(req): Json<FtpUploadReq>) -> Response {
-    match FtpManager::upload(&req.profile, &req.local_path, &req.remote_path).await {
+    match FtpManager::upload(&req.profile, &req.local_path, &req.remote_path, None).await {
         Ok(()) => Json(Value::Null).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     }
 }
 
 async fn ftp_download(Json(req): Json<FtpDownloadReq>) -> Response {
-    match FtpManager::download(&req.profile, &req.remote_path, &req.local_path).await {
+    match FtpManager::download(&req.profile, &req.remote_path, &req.local_path, None).await {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn ftp_upload_dir(Json(req): Json<FtpUploadDirReq>) -> Response {
+    match FtpManager::upload_dir(&req.profile, &req.local_dir, &req.remote_dir, None).await {
         Ok(()) => Json(Value::Null).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     }

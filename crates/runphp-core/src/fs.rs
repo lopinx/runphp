@@ -21,6 +21,8 @@ pub struct DirListing {
     pub parent: Option<String>,
     /// 子目录列表（按名称排序）。
     pub dirs: Vec<DirEntry>,
+    /// 当前目录下的文件列表（按名称排序）。
+    pub files: Vec<DirEntry>,
 }
 
 /// 浏览目录：`None` 或空串返回根列表（Windows 盘符 / Unix 根目录）。
@@ -46,6 +48,7 @@ fn roots() -> Result<DirListing> {
             current: String::new(),
             parent: None,
             dirs,
+            files: Vec::new(),
         })
     } else {
         let mut listing = list("/")?;
@@ -54,24 +57,27 @@ fn roots() -> Result<DirListing> {
     }
 }
 
-/// 列出指定目录的子目录。
+/// 列出指定目录的子目录和文件。
 fn list(p: &str) -> Result<DirListing> {
     let base = PathBuf::from(p);
     if !base.is_dir() {
         return Err(Error::Runtime(format!("路径不是目录: {p}")));
     }
-    let mut dirs: Vec<DirEntry> = std::fs::read_dir(&base)?
-        .flatten()
-        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-        .map(|e| {
-            let path = e.path();
-            DirEntry {
-                name: e.file_name().to_string_lossy().to_string(),
-                path: path.to_string_lossy().to_string(),
-            }
-        })
-        .collect();
+    let mut dirs: Vec<DirEntry> = Vec::new();
+    let mut files: Vec<DirEntry> = Vec::new();
+    for entry in std::fs::read_dir(&base)?.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let entry = DirEntry { name, path: path.to_string_lossy().to_string() };
+        if is_dir {
+            dirs.push(entry);
+        } else {
+            files.push(entry);
+        }
+    }
     dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     // Windows 盘符根目录的上级为根列表（空串），std 的 parent 返回 None
     let parent = base
         .parent()
@@ -81,6 +87,7 @@ fn list(p: &str) -> Result<DirListing> {
         current: base.to_string_lossy().to_string(),
         parent,
         dirs,
+        files,
     })
 }
 

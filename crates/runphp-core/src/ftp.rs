@@ -93,6 +93,18 @@ pub struct FtpProfileRegistry {
     pub profiles: Vec<FtpProfile>,
 }
 
+impl FtpProfileRegistry {
+    /// 按 id 查找档案。
+    pub fn get(&self, id: &str) -> Option<&FtpProfile> {
+        self.profiles.iter().find(|p| p.id == id)
+    }
+
+    /// 按 id 查找可变引用。
+    pub fn get_mut(&mut self, id: &str) -> Option<&mut FtpProfile> {
+        self.profiles.iter_mut().find(|p| p.id == id)
+    }
+}
+
 /// 远程文件条目。
 #[derive(Debug, Clone, Serialize)]
 pub struct FtpEntry {
@@ -115,6 +127,9 @@ pub enum FtpClient {
     /// SFTP（基于 russh-sftp）。
     Sftp(SftpSession),
 }
+
+/// 进度回调：(已传输字节, 总字节, 当前文件名)。总字节未知时为 0。
+pub type ProgressFn<'a> = Option<&'a (dyn Fn(u64, u64, &str) + Send + Sync)>;
 
 /// SFTP 客户端回调（空实现，仅满足 trait 要求）。
 struct SshHandler;
@@ -172,6 +187,18 @@ impl FtpManager {
     pub fn remove_profile(&self, id: &str) -> Result<(), Error> {
         let mut reg = self.load()?;
         reg.profiles.retain(|p| p.id != id);
+        self.save(&reg)
+    }
+
+    /// 更新已有档案：按 id 查找并替换，保留原 created_at。
+    pub fn update_profile(&self, profile: FtpProfile) -> Result<(), Error> {
+        let mut reg = self.load()?;
+        let target = reg
+            .get_mut(&profile.id)
+            .ok_or_else(|| Error::Other("FTP 连接档案不存在".into()))?;
+        let mut profile = profile;
+        profile.created_at = target.created_at.clone();
+        *target = profile;
         self.save(&reg)
     }
 
@@ -294,30 +321,64 @@ impl FtpManager {
     }
 
     /// 上传本地文件到远程。
+    ///
+    /// `progress` 回调在每块写入后被调用，参数为 (已传输字节, 总字节, 文件名)。
     pub async fn upload(
         profile: &FtpProfile,
         local_path: &str,
         remote_path: &str,
+        progress: ProgressFn<'_>,
     ) -> Result<(), Error> {
+        let file_name = std::path::Path::new(local_path)
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let total = tokio::fs::metadata(local_path)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0);
         let client = Self::connect(profile).await?;
+        let mut transferred: u64 = 0;
         match client {
             FtpClient::Ftp(mut ftp) => {
                 ftp.transfer_type(FileType::Binary).await.map_err(ftp_err)?;
+                let mut stream = ftp.put_with_stream(remote_path).await.map_err(ftp_err)?;
                 let mut file = tokio::fs::File::open(local_path)
                     .await
                     .map_err(Error::Io)?;
-                ftp.put_file(remote_path, &mut file)
-                    .await
-                    .map_err(ftp_err)?;
+                let mut buf = [0u8; 8192];
+                loop {
+                    let n = file.read(&mut buf).await.map_err(Error::Io)?;
+                    if n == 0 {
+                        break;
+                    }
+                    stream.write_all(&buf[..n]).await.map_err(ftp_io_err)?;
+                    transferred += n as u64;
+                    if let Some(cb) = progress {
+                        cb(transferred, total, &file_name);
+                    }
+                }
+                ftp.finalize_put_stream(stream).await.map_err(ftp_err)?;
             }
             FtpClient::Ftps(mut ftp) => {
                 ftp.transfer_type(FileType::Binary).await.map_err(ftp_err)?;
+                let mut stream = ftp.put_with_stream(remote_path).await.map_err(ftp_err)?;
                 let mut file = tokio::fs::File::open(local_path)
                     .await
                     .map_err(Error::Io)?;
-                ftp.put_file(remote_path, &mut file)
-                    .await
-                    .map_err(ftp_err)?;
+                let mut buf = [0u8; 8192];
+                loop {
+                    let n = file.read(&mut buf).await.map_err(Error::Io)?;
+                    if n == 0 {
+                        break;
+                    }
+                    stream.write_all(&buf[..n]).await.map_err(ftp_io_err)?;
+                    transferred += n as u64;
+                    if let Some(cb) = progress {
+                        cb(transferred, total, &file_name);
+                    }
+                }
+                ftp.finalize_put_stream(stream).await.map_err(ftp_err)?;
             }
             FtpClient::Sftp(sftp) => {
                 let mut file = tokio::fs::File::open(local_path)
@@ -334,6 +395,10 @@ impl FtpManager {
                         break;
                     }
                     remote.write_all(&buf[..n]).await.map_err(sftp_err_io)?;
+                    transferred += n as u64;
+                    if let Some(cb) = progress {
+                        cb(transferred, total, &file_name);
+                    }
                 }
                 remote.flush().await.map_err(sftp_err_io)?;
             }
@@ -342,15 +407,24 @@ impl FtpManager {
     }
 
     /// 下载远程文件到本地。
+    ///
+    /// `progress` 回调在每块写入后被调用，参数为 (已传输字节, 总字节, 文件名)。
     pub async fn download(
         profile: &FtpProfile,
         remote_path: &str,
         local_path: &str,
+        progress: ProgressFn<'_>,
     ) -> Result<(), Error> {
+        let file_name = std::path::Path::new(remote_path)
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
         let client = Self::connect(profile).await?;
+        let mut transferred: u64 = 0;
         match client {
             FtpClient::Ftp(mut ftp) => {
                 ftp.transfer_type(FileType::Binary).await.map_err(ftp_err)?;
+                let total = ftp.size(remote_path).await.unwrap_or(0) as u64;
                 let stream = ftp.retr_as_stream(remote_path).await.map_err(ftp_err)?;
                 let mut stream = stream;
                 let mut file = tokio::fs::File::create(local_path)
@@ -363,12 +437,17 @@ impl FtpManager {
                         break;
                     }
                     file.write_all(&buf[..n]).await.map_err(Error::Io)?;
+                    transferred += n as u64;
+                    if let Some(cb) = progress {
+                        cb(transferred, total, &file_name);
+                    }
                 }
                 file.flush().await.map_err(Error::Io)?;
                 ftp.finalize_retr_stream(stream).await.map_err(ftp_err)?;
             }
             FtpClient::Ftps(mut ftp) => {
                 ftp.transfer_type(FileType::Binary).await.map_err(ftp_err)?;
+                let total = ftp.size(remote_path).await.unwrap_or(0) as u64;
                 let stream = ftp.retr_as_stream(remote_path).await.map_err(ftp_err)?;
                 let mut stream = stream;
                 let mut file = tokio::fs::File::create(local_path)
@@ -381,11 +460,20 @@ impl FtpManager {
                         break;
                     }
                     file.write_all(&buf[..n]).await.map_err(Error::Io)?;
+                    transferred += n as u64;
+                    if let Some(cb) = progress {
+                        cb(transferred, total, &file_name);
+                    }
                 }
                 file.flush().await.map_err(Error::Io)?;
                 ftp.finalize_retr_stream(stream).await.map_err(ftp_err)?;
             }
             FtpClient::Sftp(sftp) => {
+                let total = sftp
+                    .metadata(remote_path)
+                    .await
+                    .map(|m| m.len())
+                    .unwrap_or(0);
                 let mut remote = sftp.open(remote_path).await.map_err(sftp_err)?;
                 let mut file = tokio::fs::File::create(local_path)
                     .await
@@ -397,8 +485,54 @@ impl FtpManager {
                         break;
                     }
                     file.write_all(&buf[..n]).await.map_err(Error::Io)?;
+                    transferred += n as u64;
+                    if let Some(cb) = progress {
+                        cb(transferred, total, &file_name);
+                    }
                 }
                 file.flush().await.map_err(Error::Io)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// 递归上传本地目录到远程。
+    ///
+    /// 会遍历 `local_dir` 下所有文件和子目录，在远程 `remote_dir` 下重建结构。
+    /// `progress` 回调对每个文件的每块写入触发，参数为 (已传输字节, 当前文件总字节, 文件名)。
+    pub async fn upload_dir(
+        profile: &FtpProfile,
+        local_dir: &str,
+        remote_dir: &str,
+        progress: ProgressFn<'_>,
+    ) -> Result<(), Error> {
+        Self::upload_dir_inner(profile, std::path::Path::new(local_dir), remote_dir, progress)
+            .await
+    }
+
+    async fn upload_dir_inner(
+        profile: &FtpProfile,
+        local_dir: &std::path::Path,
+        remote_dir: &str,
+        progress: ProgressFn<'_>,
+    ) -> Result<(), Error> {
+        // 确保远程目录存在（忽略已存在错误）
+        let _ = Self::make_dir(profile, remote_dir).await;
+
+        let mut entries = tokio::fs::read_dir(local_dir)
+            .await
+            .map_err(Error::Io)?;
+        while let Some(entry) = entries.next_entry().await.map_err(Error::Io)? {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let local_path = entry.path();
+            let remote_path = format!("{}/{}", remote_dir.trim_end_matches('/'), name);
+            let file_type = entry.file_type().await.map_err(Error::Io)?;
+            if file_type.is_dir() {
+                Box::pin(Self::upload_dir_inner(profile, &local_path, &remote_path, progress))
+                    .await?;
+            } else if file_type.is_file() {
+                Self::upload(profile, &local_path.to_string_lossy(), &remote_path, progress)
+                    .await?;
             }
         }
         Ok(())
@@ -645,5 +779,52 @@ mod tests {
         mgr.remove_profile(&id).unwrap();
         assert!(mgr.list_profiles().unwrap().is_empty());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn update_profile_preserves_created_at() {
+        let dir = std::env::temp_dir().join("runphp-ftp-update-test");
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let mgr = FtpManager::new(&dir);
+        let p = FtpProfile::new("原始".into(), FtpProtocol::Ftp, "h1".into(), 21);
+        mgr.add_profile(p).unwrap();
+        let id = mgr.list_profiles().unwrap()[0].id.clone();
+        let original_created = mgr.list_profiles().unwrap()[0].created_at.clone();
+
+        let mut updated = mgr.list_profiles().unwrap()[0].clone();
+        updated.name = "改后".into();
+        updated.host = "h2".into();
+        mgr.update_profile(updated).unwrap();
+
+        let after_reg = mgr.load().unwrap();
+        let after = after_reg.get(&id).unwrap();
+        assert_eq!(after.name, "改后");
+        assert_eq!(after.host, "h2");
+        assert_eq!(after.created_at, original_created);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn update_nonexistent_profile_errors() {
+        let dir = std::env::temp_dir().join("runphp-ftp-missing-test");
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let mgr = FtpManager::new(&dir);
+        let p = FtpProfile::new("不存在".into(), FtpProtocol::Ftp, "h".into(), 21);
+        assert!(mgr.update_profile(p).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn registry_get_by_id() {
+        let mut reg = FtpProfileRegistry::default();
+        let p = FtpProfile::new("x".into(), FtpProtocol::Sftp, "h".into(), 22);
+        let id = p.id.clone();
+        reg.profiles.push(p);
+        assert!(reg.get(&id).is_some());
+        assert!(reg.get("nope").is_none());
+        reg.get_mut(&id).unwrap().name = "y".into();
+        assert_eq!(reg.get(&id).unwrap().name, "y");
     }
 }

@@ -464,28 +464,76 @@ async fn ftp_list_dir(profile: FtpProfile, path: String) -> Result<Vec<FtpEntry>
         .map_err(|e| e.to_string())
 }
 
-/// 上传本地文件到远程。
+/// 上传本地文件到远程，进度通过事件推送。
 #[tauri::command]
 async fn ftp_upload(
     profile: FtpProfile,
     local_path: String,
     remote_path: String,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
-    FtpManager::upload(&profile, &local_path, &remote_path)
-        .await
-        .map_err(|e| e.to_string())
+    let progress_app = std::sync::Arc::new(app);
+    FtpManager::upload(
+        &profile,
+        &local_path,
+        &remote_path,
+        Some(&(move |d: u64, t: u64, f: &str| {
+            let _ = progress_app.emit(
+                "ftp-upload-progress",
+                serde_json::json!({ "transferred": d, "total": t, "file": f }),
+            );
+        }) as &(dyn Fn(u64, u64, &str) + Send + Sync)),
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
-/// 下载远程文件到本地。
+/// 下载远程文件到本地，进度通过事件推送。
 #[tauri::command]
 async fn ftp_download(
     profile: FtpProfile,
     remote_path: String,
     local_path: String,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
-    FtpManager::download(&profile, &remote_path, &local_path)
-        .await
-        .map_err(|e| e.to_string())
+    let progress_app = std::sync::Arc::new(app);
+    FtpManager::download(
+        &profile,
+        &remote_path,
+        &local_path,
+        Some(&(move |d: u64, t: u64, f: &str| {
+            let _ = progress_app.emit(
+                "ftp-download-progress",
+                serde_json::json!({ "transferred": d, "total": t, "file": f }),
+            );
+        }) as &(dyn Fn(u64, u64, &str) + Send + Sync)),
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// 递归上传本地目录到远程，进度通过事件推送。
+#[tauri::command]
+async fn ftp_upload_dir(
+    profile: FtpProfile,
+    local_dir: String,
+    remote_dir: String,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let progress_app = std::sync::Arc::new(app);
+    FtpManager::upload_dir(
+        &profile,
+        &local_dir,
+        &remote_dir,
+        Some(&(move |d: u64, t: u64, f: &str| {
+            let _ = progress_app.emit(
+                "ftp-upload-progress",
+                serde_json::json!({ "transferred": d, "total": t, "file": f }),
+            );
+        }) as &(dyn Fn(u64, u64, &str) + Send + Sync)),
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// 删除远程文件或目录。
@@ -517,6 +565,14 @@ async fn ftp_rename(
 ) -> Result<(), String> {
     FtpManager::rename(&profile, &from, &to)
         .await
+        .map_err(|e| e.to_string())
+}
+
+/// 更新 FTP 连接档案。
+#[tauri::command]
+fn ftp_update(profile: FtpProfile) -> Result<(), String> {
+    FtpManager::new(&cfg().data_dir)
+        .update_profile(profile)
         .map_err(|e| e.to_string())
 }
 
@@ -584,9 +640,11 @@ pub fn run() {
             ftp_list_dir,
             ftp_upload,
             ftp_download,
+            ftp_upload_dir,
             ftp_delete,
             ftp_mkdir,
             ftp_rename,
+            ftp_update,
         ])
         .run(tauri::generate_context!())
         .expect("运行 Tauri 应用时出错");
