@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, h } from "vue";
 import { useMessage, useDialog, NButton } from "naive-ui";
+import { useRoute, useRouter } from "vue-router";
 import {
   dbSqliteList,
   dbSqliteCreate,
@@ -24,6 +25,8 @@ import {
 
 const message = useMessage();
 const dialog = useDialog();
+const route = useRoute();
+const router = useRouter();
 
 // ---- 共享类型 ----
 interface ActiveDb {
@@ -300,6 +303,28 @@ function confirmDeleteRemote(p: ConnectionProfile) {
 
 onMounted(async () => {
   await Promise.all([loadSqliteDbs(), loadRemoteProfiles()]);
+  // 从设置页跳转：携带 add_db 查询参数时自动打开添加连接表单并预填
+  const q = route.query;
+  if (q.add_db) {
+    const driver = String(q.add_db) as DbDriver;
+    if (driver in DEFAULT_PORTS) {
+      const port = Number(q.port) || DEFAULT_PORTS[driver];
+      newRemote.value = {
+        id: "",
+        name: q.name ? String(q.name) : "",
+        driver,
+        host: q.host ? String(q.host) : "127.0.0.1",
+        port,
+        username: "",
+        password: "",
+        database: null,
+        created_at: "",
+      };
+      showAddRemote.value = true;
+    }
+    // 清理查询参数，避免刷新页面重复触发
+    router.replace({ path: route.path, query: {} });
+  }
 });
 </script>
 

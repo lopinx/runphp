@@ -4,8 +4,9 @@ use runphp_core::{
     caddy,
     db::remote::{ConnectionProfile, RemoteDbManager, RemoteQueryResult, RemoteTableInfo},
     db::sqlite::{DatabaseFile, QueryResult, SqliteManager, TableInfo},
+    detect::{self, LocalDetection},
     hosts::{entries_from_sites, HostEntry, HostsManager},
-    AppConfig, RuntimeManager, Site,
+    runtime::ImportResult, AppConfig, RuntimeManager, Site,
 };
 use tauri::Emitter;
 
@@ -48,6 +49,30 @@ async fn runtime_install(version: String, app: tauri::AppHandle) -> Result<Strin
         .await
         .map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().to_string())
+}
+
+/// 检测本地 FrankenPHP 二进制与数据库服务。
+#[tauri::command]
+async fn runtime_detect_local() -> Result<LocalDetection, String> {
+    Ok(detect::detect().await)
+}
+
+/// 导入本地 FrankenPHP 二进制到托管目录（返回导入结果）。
+#[tauri::command]
+async fn runtime_import_local(path: String) -> Result<ImportResult, String> {
+    let cfg = cfg();
+    let mgr = RuntimeManager::new(cfg.clone());
+    let result = mgr
+        .import(std::path::Path::new(&path))
+        .await
+        .map_err(|e| e.to_string())?;
+    // 首次导入自动设为默认
+    if cfg.default_runtime_version.is_empty() {
+        let mut new_cfg = cfg;
+        new_cfg.default_runtime_version = result.version.clone();
+        new_cfg.save().map_err(|e| e.to_string())?;
+    }
+    Ok(result)
 }
 
 /// 列出全部站点。
@@ -324,6 +349,8 @@ pub fn run() {
             data_dir,
             runtime_list,
             runtime_install,
+            runtime_detect_local,
+            runtime_import_local,
             runtime_start,
             runtime_stop,
             runtime_reload,

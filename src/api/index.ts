@@ -78,6 +78,27 @@ export interface RuntimeInfo {
   is_default: boolean;
 }
 
+// 本地环境检测结果
+export interface DetectedBinary {
+  name: string;
+  path: string;
+}
+export interface DetectedService {
+  driver: DbDriver;
+  name: string;
+  host: string;
+  port: number;
+  running: boolean;
+}
+export interface LocalDetection {
+  frankenphp: DetectedBinary[];
+  services: DetectedService[];
+}
+export interface ImportResult {
+  path: string;
+  version: string;
+}
+
 // ---- 具体接口 ----
 
 /** 获取数据目录。 */
@@ -177,3 +198,28 @@ export const dbRemoteQueryTable = (
   call<QueryResult>("db_remote_query_table", { profile, table, limit, offset });
 export const dbRemoteExecute = (profile: ConnectionProfile, sql: string) =>
   call<QueryResult>("db_remote_execute", { profile, sql });
+
+// 本地环境检测
+export interface DetectedBinary {
+  name: string;
+  path: string;
+}
+export interface DetectedService {
+  driver: DbDriver;
+  name: string;
+  host: string;
+  port: number;
+  running: boolean;
+}
+export interface LocalDetection {
+  frankenphp: DetectedBinary[];
+  services: DetectedService[];
+}
+export interface ImportResult {
+  path: string;
+  version: string;
+}
+export const runtimeDetectLocal = () =>
+  call<LocalDetection>("runtime_detect_local");
+export const runtimeImportLocal = (path: string) =>
+  call<ImportResult>("runtime_import_local", { path });

@@ -18,6 +18,7 @@ use axum::{
 use runphp_core::{
     caddy,
     db::{remote::*, sqlite::*},
+    detect,
     hosts::{entries_from_sites, HostsManager},
     AppConfig, RuntimeManager, Site,
 };
@@ -78,7 +79,9 @@ pub async fn serve(
         .route("/db_remote_test", post(db_remote_test))
         .route("/db_remote_tables", post(db_remote_tables))
         .route("/db_remote_query_table", post(db_remote_query_table))
-        .route("/db_remote_execute", post(db_remote_execute));
+        .route("/db_remote_execute", post(db_remote_execute))
+        .route("/runtime_detect_local", post(runtime_detect_local))
+        .route("/runtime_import_local", post(runtime_import_local));
 
     // 设置 token 时对 API 启用 Bearer 鉴权
     let api = if has_token {
@@ -226,6 +229,10 @@ struct RemoteExecuteReq {
     profile: ConnectionProfile,
     sql: String,
 }
+#[derive(Deserialize)]
+struct PathReq {
+    path: String,
+}
 
 type S = State<Arc<PanelState>>;
 
@@ -260,6 +267,26 @@ async fn runtime_install(State(s): S, Json(req): Json<VersionReq>) -> Response {
                 let _ = new_cfg.save();
             }
             Json(json!(p.to_string_lossy().to_string())).into_response()
+        }
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn runtime_detect_local() -> Json<Value> {
+    Json(json!(detect::detect().await))
+}
+
+async fn runtime_import_local(State(s): S, Json(req): Json<PathReq>) -> Response {
+    let mgr = RuntimeManager::new(s.cfg.clone());
+    match mgr.import(std::path::Path::new(&req.path)).await {
+        Ok(result) => {
+            // 首次导入自动设为默认（与 install 行为一致）
+            if s.cfg.default_runtime_version.is_empty() {
+                let mut new_cfg = s.cfg.clone();
+                new_cfg.default_runtime_version = result.version.clone();
+                let _ = new_cfg.save();
+            }
+            Json(json!(result)).into_response()
         }
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     }
