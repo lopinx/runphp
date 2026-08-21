@@ -109,5 +109,3 @@ async fn probe_services() -> Vec<DetectedService> {
         .collect();
     futures_util::future::join_all(probes).await
 }
-
-</file_content>
