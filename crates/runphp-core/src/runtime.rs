@@ -19,6 +19,15 @@ pub struct InstalledRuntime {
     pub is_default: bool,
 }
 
+/// 本地运行时导入结果。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ImportResult {
+    /// 导入后的二进制路径。
+    pub path: PathBuf,
+    /// 版本标签。
+    pub version: String,
+}
+
 /// 运行时管理器。
 pub struct RuntimeManager {
     cfg: AppConfig,
@@ -105,6 +114,34 @@ impl RuntimeManager {
             .into_iter()
             .next()
             .ok_or_else(|| Error::Runtime("运行时列表为空".into()))
+    }
+
+    /// 导入已有的本地 FrankenPHP 二进制到托管目录。
+    ///
+    /// 版本标签优先通过执行 `<binary> version` 解析；失败时回退为 `local`。
+    pub async fn import(&self, source: &Path) -> Result<ImportResult> {
+        if !source.is_file() {
+            return Err(Error::Runtime(format!(
+                "文件不存在: {}",
+                source.display()
+            )));
+        }
+        let label = detect_version_label(source)
+            .await
+            .unwrap_or_else(|| "local".to_string());
+        let dest_dir = self.version_dir(&label);
+        std::fs::create_dir_all(&dest_dir)?;
+        let bin_path = self.binary_path(&label);
+        // 源文件已在托管目录内时无需复制
+        if source != bin_path {
+            std::fs::copy(source, &bin_path)?;
+            set_executable(&bin_path)?;
+        }
+        tracing::info!("已导入本地运行时 {label}: {}", bin_path.display());
+        Ok(ImportResult {
+            path: bin_path,
+            version: label,
+        })
     }
 
     /// 下载并安装指定版本。
@@ -227,6 +264,43 @@ fn set_executable(path: &Path) -> Result<()> {
         let _ = path;
     }
     Ok(())
+}
+
+/// 执行 `<binary> version` 并解析出版本标签（如 `1.12.7`），5 秒超时。
+///
+/// FrankenPHP 的版本输出形如 `frankenphp v1.12.7 ...`，取首个形如 `v?数字.数字` 的片段。
+async fn detect_version_label(binary: &Path) -> Option<String> {
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::process::Command::new(binary)
+            .arg("version")
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // 提取首个 `v1.2.3` 或 `1.2.3` 形式的版本号
+    let mut cur = String::new();
+    let mut versions: Vec<String> = Vec::new();
+    for ch in text.chars() {
+        if ch.is_ascii_digit() || ch == '.' {
+            cur.push(ch);
+        } else {
+            if cur.contains('.') && cur.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                versions.push(cur.trim_matches('.').to_string());
+            }
+            cur.clear();
+        }
+    }
+    if cur.contains('.') {
+        versions.push(cur.trim_matches('.').to_string());
+    }
+    versions.into_iter().next()
 }
 
 /// 清理版本号，防止路径穿越。

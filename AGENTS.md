@@ -17,6 +17,7 @@ crates/runphp-core/   核心业务库（无 UI 依赖，三端共用）
   src/hosts.rs        hosts 受管区块读写 + 备份 + 提权
   src/db/sqlite.rs    rusqlite bundled 引擎 + 表结构浏览 + SQL 执行器
   src/db/remote.rs    mysql_async + tokio-postgres 连接管理 + 表浏览 + SQL 执行；MongoDB/Redis/Qdrant 仅连接测试
+  src/detect.rs       本地环境检测：PATH 扫描 FrankenPHP 二进制 + 数据库服务端口探测
 crates/runphp-cli/    无头二进制（clap CLI + axum 面板）
   src/main.rs         子命令分发（runtime/site/hosts/run/stop/reload/status/logs/panel/service-install）
   src/panel.rs        axum Web 面板（rust_embed 嵌入 dist/，Bearer token 鉴权）
