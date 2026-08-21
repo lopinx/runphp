@@ -39,6 +39,10 @@ russh-keys = { workspace = true }
 async-trait = "0.1"
 # libSQL（SQLite 兼容，支持本地/远程/嵌入式副本）
 libsql = { version = "0.10.0-pre.4", default-features = false, features = ["core", "remote", "replication", "sync", "tls"] }
+# FTP/FTPS 客户端
+suppaftp = { version = "10", default-features = false, features = ["tokio", "tokio-rustls-ring"] }
+# SFTP 客户端（复用 russh 连接）
+russh-sftp = "2.4"
 
 # Unix 专用：进程信号（kill_process 的 SIGTERM）
 [target.'cfg(unix)'.dependencies]
