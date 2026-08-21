@@ -20,11 +20,25 @@ uuid = { workspace = true }
 sha2 = "0.10"
 zip = { version = "4", default-features = false, features = ["deflate"] }
 futures-util = "0.3"
+# 主机硬件/系统信息（仪表盘底部状态栏）
+sysinfo = "0.39"
 # SQLite 引擎（内置）
 rusqlite = { version = "0.37", features = ["bundled"] }
 # MySQL/PostgreSQL 客户端（仅连接管理已有实例，不含 sqlite 避免与 rusqlite 冲突）
-mysql_async = { version = "0.35", default-features = false, features = ["minimal-rust"] }
-tokio-postgres = { version = "0.7", features = ["with-serde_json-1"] }
+mysql_async = { version = "0.35", default-features = false, features = ["minimal-rust", "rustls-tls", "ring", "tls12"] }
+tokio-postgres = { version = "0.7", features = ["with-serde_json-1", "runtime"] }
+# SSL 加密连接
+tokio-rustls = { workspace = true }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+webpki-roots = { workspace = true }
+tokio-postgres-rustls = { workspace = true }
+# SSH 隧道
+russh = { workspace = true }
+russh-keys = { workspace = true }
+async-trait = "0.1"
+# libSQL（SQLite 兼容，支持本地/远程/嵌入式副本）
+libsql = { version = "0.10.0-pre.4", default-features = false, features = ["core", "remote", "replication", "sync", "tls"] }
 
 # Unix 专用：进程信号（kill_process 的 SIGTERM）
 [target.'cfg(unix)'.dependencies]

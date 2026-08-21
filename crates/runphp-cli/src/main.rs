@@ -306,22 +306,15 @@ async fn main() {
             };
             println!("启动 FrankenPHP v{}…", rt.version);
             match caddy::start(&cfg, &rt.path).await {
-                Ok((info, mut child)) => {
+                Ok(info) => {
                     println!("已启动，PID={}，日志: {}", info.pid, info.log_path.display());
-                    // 等待子进程退出或收到 Ctrl+C
-                    tokio::select! {
-                        status = child.wait() => {
-                            if let Ok(s) = status {
-                                println!("FrankenPHP 退出，状态: {s}");
-                            }
-                        }
-                        _ = tokio::signal::ctrl_c() => {
-                            println!("\n收到 Ctrl+C，停止服务…");
-                            let _ = caddy::stop(&cfg).await;
-                            // 兜底 kill
-                            let _ = child.kill().await;
-                        }
-                    }
+                    // CLI 前台运行：等待 Ctrl+C 后停止
+                    // 进程崩溃自动重启由 caddy 模块的监控任务负责
+                    tokio::signal::ctrl_c()
+                        .await
+                        .ok();
+                    println!("\n收到 Ctrl+C，停止服务…");
+                    let _ = caddy::stop(&cfg).await;
                 }
                 Err(e) => {
                     eprintln!("启动失败: {e}");

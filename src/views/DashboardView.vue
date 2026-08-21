@@ -51,10 +51,14 @@ const statusType = computed(() =>
   store.running ? "success" : "default"
 );
 const statusText = computed(() => (store.running ? "运行中" : "已停止"));
+
+onMounted(() => {
+  void load();
+});
 </script>
 
 <template>
-  <n-space vertical size="large">
+  <n-space vertical size="large" style="padding-bottom: 44px">
     <n-grid :cols="3" :x-gap="16">
       <n-gi>
         <n-card>
@@ -132,9 +136,14 @@ const statusText = computed(() => (store.running ? "运行中" : "已停止"));
       </n-descriptions>
     </n-card>
 
-    <n-alert v-if="!store.hasRuntime" type="info" :bordered="false">
-      尚未安装运行时，请到「设置」页面下载 FrankenPHP。
+    <n-alert
+      v-if="!store.loading && !store.hasRuntime"
+      type="info"
+      :bordered="false"
+    >
+      尚未安装运行时，请到「设置」页面下载或导入 FrankenPHP。
     </n-alert>
+
   </n-space>
 </template>
 

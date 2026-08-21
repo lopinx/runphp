@@ -3,13 +3,16 @@
 //! 桌面端（Tauri）、命令行（runphp-cli）、Web 面板三端共用本库。
 
 pub mod caddy;
+pub mod adminer;
 pub mod config;
 pub mod db;
 pub mod detect;
 pub mod error;
+pub mod fs;
 pub mod hosts;
 pub mod runtime;
 pub mod site;
+pub mod system;
 
 pub use config::AppConfig;
 pub use error::Error;
