@@ -1,12 +1,15 @@
 //! Tauri 2 桌面壳：薄封装 runphp-core，不含业务逻辑。
 
 use runphp_core::{
+    adminer,
     caddy,
+    db::libsql::{LibsqlManager, LibsqlProfile},
     db::remote::{ConnectionProfile, RemoteDbManager, RemoteQueryResult, RemoteTableInfo},
     db::sqlite::{DatabaseFile, QueryResult, SqliteManager, TableInfo},
     detect::{self, LocalDetection},
+    fs,
     hosts::{entries_from_sites, HostEntry, HostsManager},
-    runtime::ImportResult, AppConfig, RuntimeManager, Site,
+    runtime::{self, ImportResult}, system, AppConfig, RuntimeManager, Site,
 };
 use tauri::Emitter;
 
@@ -75,6 +78,32 @@ async fn runtime_import_local(path: String) -> Result<ImportResult, String> {
     Ok(result)
 }
 
+/// 拉取 GitHub Releases 发布的可安装版本列表。
+#[tauri::command]
+async fn runtime_versions() -> Result<Vec<String>, String> {
+    runtime::available_versions().await.map_err(|e| e.to_string())
+}
+
+/// 浏览本地目录（为 UI 目录选择器提供数据）。
+#[tauri::command]
+fn fs_browse(path: Option<String>) -> Result<fs::DirListing, String> {
+    fs::browse(path.as_deref()).map_err(|e| e.to_string())
+}
+
+/// 获取主机系统信息（仪表盘底部状态栏）。
+#[tauri::command]
+fn system_info() -> system::SystemInfo {
+    system::collect()
+}
+
+/// 确认 Adminer 已下载并构造带预填参数的管理 URL。
+#[tauri::command]
+async fn adminer_manage(params: adminer::AdminerParams) -> Result<String, String> {
+    let c = cfg();
+    adminer::ensure_downloaded(&c).await.map_err(|e| e.to_string())?;
+    Ok(adminer::build_url(&params))
+}
+
 /// 列出全部站点。
 #[tauri::command]
 fn site_list() -> Vec<Site> {
@@ -82,25 +111,24 @@ fn site_list() -> Vec<Site> {
     cfg.load_sites().map(|r| r.sites).unwrap_or_default()
 }
 
-/// 新增站点并写 Caddyfile。
+/// 新增站点并写 Caddyfile（运行中时自动热重载）。
 #[tauri::command]
-fn site_add(mut site: Site) -> Result<(), String> {
+async fn site_add(site: Site) -> Result<(), String> {
     let cfg = cfg();
     let mut reg = cfg.load_sites().map_err(|e| e.to_string())?;
     reg.validate(&site, None).map_err(|e| e.to_string())?;
-    // reg.add 内部会调用 site.touch()，无需手动重复
     reg.add(site);
     cfg.save_sites(&reg).map_err(|e| e.to_string())?;
-    caddy::write_caddyfile(&cfg, &reg.sites).map_err(|e| e.to_string())?;
+    let binary = RuntimeManager::new(cfg.clone()).resolve(None).map_err(|e| e.to_string())?;
+    caddy::write_and_reload(&cfg, &reg.sites, &binary.path).await.map_err(|e| e.to_string())?;
     Ok(())
 }
 
 /// 更新站点。
 #[tauri::command]
-fn site_update(mut site: Site) -> Result<(), String> {
+async fn site_update(mut site: Site) -> Result<(), String> {
     let cfg = cfg();
     let mut reg = cfg.load_sites().map_err(|e| e.to_string())?;
-    // 先取出原站点信息（避免借用冲突）
     let created_at = reg
         .get(&site.id)
         .map(|s| s.created_at.clone())
@@ -112,33 +140,30 @@ fn site_update(mut site: Site) -> Result<(), String> {
         *existing = site;
     }
     cfg.save_sites(&reg).map_err(|e| e.to_string())?;
-    caddy::write_caddyfile(&cfg, &reg.sites).map_err(|e| e.to_string())?;
+    let binary = RuntimeManager::new(cfg.clone()).resolve(None).map_err(|e| e.to_string())?;
+    caddy::write_and_reload(&cfg, &reg.sites, &binary.path).await.map_err(|e| e.to_string())?;
     Ok(())
 }
 
 /// 删除站点。
 #[tauri::command]
-fn site_remove(id: String) -> Result<(), String> {
+async fn site_remove(id: String) -> Result<(), String> {
     let cfg = cfg();
     let mut reg = cfg.load_sites().map_err(|e| e.to_string())?;
     reg.remove(&id).ok_or("站点不存在".to_string())?;
     cfg.save_sites(&reg).map_err(|e| e.to_string())?;
-    caddy::write_caddyfile(&cfg, &reg.sites).map_err(|e| e.to_string())?;
+    let binary = RuntimeManager::new(cfg.clone()).resolve(None).map_err(|e| e.to_string())?;
+    caddy::write_and_reload(&cfg, &reg.sites, &binary.path).await.map_err(|e| e.to_string())?;
     Ok(())
 }
 
-/// 启动 FrankenPHP。
+/// 启动 FrankenPHP（带崩溃自动重启监控）。
 #[tauri::command]
 async fn runtime_start() -> Result<u32, String> {
     let cfg = cfg();
     let mgr = RuntimeManager::new(cfg.clone());
     let rt = mgr.resolve(None).map_err(|e| e.to_string())?;
-    let (info, child) = caddy::start(&cfg, &rt.path).await.map_err(|e| e.to_string())?;
-    // 桌面端：后台等待子进程，不阻塞命令
-    tokio::spawn(async move {
-        let mut child = child;
-        let _ = child.wait().await;
-    });
+    let info = caddy::start(&cfg, &rt.path).await.map_err(|e| e.to_string())?;
     Ok(info.pid)
 }
 
@@ -333,6 +358,69 @@ async fn db_remote_execute(profile: ConnectionProfile, sql: String) -> Result<Re
         .map_err(|e| e.to_string())
 }
 
+/// 列出 libSQL 连接档案。
+#[tauri::command]
+fn db_libsql_list() -> Result<Vec<LibsqlProfile>, String> {
+    LibsqlManager::new(&cfg().data_dir)
+        .list_profiles()
+        .map_err(|e| e.to_string())
+}
+
+/// 添加 libSQL 连接档案。
+#[tauri::command]
+fn db_libsql_add(profile: LibsqlProfile) -> Result<(), String> {
+    LibsqlManager::new(&cfg().data_dir)
+        .add_profile(profile)
+        .map_err(|e| e.to_string())
+}
+
+/// 删除 libSQL 连接档案。
+#[tauri::command]
+fn db_libsql_remove(id: String) -> Result<(), String> {
+    LibsqlManager::new(&cfg().data_dir)
+        .remove_profile(&id)
+        .map_err(|e| e.to_string())
+}
+
+/// 测试 libSQL 连接。
+#[tauri::command]
+async fn db_libsql_test(profile: LibsqlProfile) -> Result<String, String> {
+    LibsqlManager::test_connection(&profile)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 列出 libSQL 表。
+#[tauri::command]
+async fn db_libsql_tables(profile: LibsqlProfile) -> Result<Vec<TableInfo>, String> {
+    LibsqlManager::list_tables(&profile)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 查询 libSQL 表数据。
+#[tauri::command]
+async fn db_libsql_query_table(
+    profile: LibsqlProfile,
+    table: String,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> Result<QueryResult, String> {
+    let lim = limit.unwrap_or(100);
+    let off = offset.unwrap_or(0);
+    LibsqlManager::query_table(&profile, &table, lim, off)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 执行 libSQL SQL。
+#[tauri::command]
+async fn db_libsql_execute(profile: LibsqlProfile, sql: String) -> Result<QueryResult, String> {
+    LibsqlManager::execute(&profile, &sql)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 // 给前端的简化结构（路径转字符串）。
 #[derive(serde::Serialize)]
 struct RuntimeInfo {
@@ -351,6 +439,10 @@ pub fn run() {
             runtime_install,
             runtime_detect_local,
             runtime_import_local,
+            runtime_versions,
+            fs_browse,
+            system_info,
+            adminer_manage,
             runtime_start,
             runtime_stop,
             runtime_reload,
@@ -379,6 +471,13 @@ pub fn run() {
             db_remote_tables,
             db_remote_query_table,
             db_remote_execute,
+            db_libsql_list,
+            db_libsql_add,
+            db_libsql_remove,
+            db_libsql_test,
+            db_libsql_tables,
+            db_libsql_query_table,
+            db_libsql_execute,
         ])
         .run(tauri::generate_context!())
         .expect("运行 Tauri 应用时出错");

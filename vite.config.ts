@@ -33,7 +33,8 @@ export default defineConfig({
     host: host || false,
     // 监听 Tauri 开发环境环境变量变化时自动重启
     watch: {
-      ignored: ["**/src-tauri/**"],
+      // 忽略 Rust 构建产物目录：Cargo 并发写入时 chokidar 监听 target/ 会触发 EBUSY 崩溃
+      ignored: ["**/src-tauri/**", "**/target/**"],
     },
   },
   // 预构建大依赖，加速 dev 模式首次加载

@@ -108,6 +108,7 @@ export const getDataDir = () => call<string>("data_dir");
 export const runtimeList = () => call<RuntimeInfo[]>("runtime_list");
 export const runtimeInstall = (version: string) =>
   call<string>("runtime_install", { version });
+export const runtimeVersions = () => call<string[]>("runtime_versions");
 export const runtimeStart = () => call<number>("runtime_start");
 export const runtimeStop = () => call<void>("runtime_stop");
 export const runtimeReload = () => call<void>("runtime_reload");
@@ -151,6 +152,7 @@ export interface QueryResult {
   affected: number;
 }
 export type DbDriver = "mysql" | "postgres" | "mongodb" | "redis" | "qdrant";
+export type SslMode = "disabled" | "preferred" | "required";
 export interface ConnectionProfile {
   id: string;
   name: string;
@@ -161,6 +163,13 @@ export interface ConnectionProfile {
   password: string;
   database: string | null;
   created_at: string;
+  ssl_mode?: SslMode | null;
+  ssl_ca?: string | null;
+  ssh_host?: string | null;
+  ssh_port?: number | null;
+  ssh_user?: string | null;
+  ssh_key?: string | null;
+  ssh_password?: string | null;
 }
 
 export const dbSqliteList = () => call<DatabaseFile[]>("db_sqlite_list");
@@ -199,8 +208,74 @@ export const dbRemoteQueryTable = (
 export const dbRemoteExecute = (profile: ConnectionProfile, sql: string) =>
   call<QueryResult>("db_remote_execute", { profile, sql });
 
+// libSQL 数据库（本地文件 / 远程连接 / 嵌入式副本）
+export type LibsqlMode = "local" | "remote" | "replica";
+export interface LibsqlProfile {
+  id: string;
+  name: string;
+  mode: LibsqlMode;
+  path: string | null;
+  url: string | null;
+  auth_token: string | null;
+  created_at: string;
+}
+export const dbLibsqlList = () => call<LibsqlProfile[]>("db_libsql_list");
+export const dbLibsqlAdd = (profile: LibsqlProfile) =>
+  call<void>("db_libsql_add", { profile });
+export const dbLibsqlRemove = (id: string) =>
+  call<void>("db_libsql_remove", { id });
+export const dbLibsqlTest = (profile: LibsqlProfile) =>
+  call<string>("db_libsql_test", { profile });
+export const dbLibsqlTables = (profile: LibsqlProfile) =>
+  call<TableInfo[]>("db_libsql_tables", { profile });
+export const dbLibsqlQueryTable = (
+  profile: LibsqlProfile,
+  table: string,
+  limit?: number,
+  offset?: number,
+) =>
+  call<QueryResult>("db_libsql_query_table", { profile, table, limit, offset });
+export const dbLibsqlExecute = (profile: LibsqlProfile, sql: string) =>
+  call<QueryResult>("db_libsql_execute", { profile, sql });
+
 // 本地环境检测（类型定义见上方 DetectedBinary / DetectedService / LocalDetection / ImportResult）
 export const runtimeDetectLocal = () =>
   call<LocalDetection>("runtime_detect_local");
 export const runtimeImportLocal = (path: string) =>
   call<ImportResult>("runtime_import_local", { path });
+
+// 文件系统浏览（目录选择器）
+export interface DirEntry {
+  name: string;
+  path: string;
+}
+export interface DirListing {
+  current: string;
+  parent: string | null;
+  dirs: DirEntry[];
+}
+export const fsBrowse = (path?: string) =>
+  call<DirListing>("fs_browse", { path: path ?? null });
+
+// 主机系统信息（仪表盘底部状态栏）
+export interface SystemInfo {
+  cpu_arch: string;
+  memory_total: number;
+  disk_total: number;
+  disk_free: number;
+  os: string;
+}
+export const systemInfo = () => call<SystemInfo>("system_info");
+
+// Adminer 数据库管理
+export interface AdminerParams {
+  db_type: string;
+  path?: string | null;
+  host?: string | null;
+  port?: number | null;
+  username?: string | null;
+  password?: string | null;
+  database?: string | null;
+}
+export const adminerManage = (params: AdminerParams) =>
+  call<string>("adminer_manage", { ...params });

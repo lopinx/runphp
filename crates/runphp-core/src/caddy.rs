@@ -6,7 +6,10 @@
 use crate::{config::AppConfig, site::Site, Error, Result};
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokio::process::Command;
+use tokio::sync::Mutex;
 
 /// 生成的 Caddyfile 全局选项块。
 fn global_block(admin_addr: &str) -> String {
@@ -35,12 +38,7 @@ fn site_block(site: &Site) -> String {
 
     // PHP 处理：worker 模式或普通模式
     if let Some(w) = &site.worker {
-        // 对 worker 脚本路径加引号（处理含空格的情况）
-        let script = if w.script.contains(' ') {
-            format!("\"{}\"", w.script)
-        } else {
-            w.script.clone()
-        };
+        let script = quote_path(&PathBuf::from(&w.script));
         lines.push(format!(
             "    php_server {{\n        worker {} {}\n    }}",
             script, w.num
@@ -53,18 +51,24 @@ fn site_block(site: &Site) -> String {
     lines.join("\n") + "\n"
 }
 
-/// 对路径加引号（处理含空格的情况）。
+/// 以 Caddyfile 语法规则对路径加引号转义。
+///
+/// Caddyfile 中含空格或特殊字符的路径需用双引号包裹，
+/// 路径内的双引号需用 `\"` 转义，反斜杠保持原样（不做额外转义）。
 fn quote_path(p: &std::path::Path) -> String {
     let s = p.to_string_lossy();
-    if s.contains(' ') {
-        format!("{s:?}")
+    if s.contains(' ') || s.contains('"') {
+        let escaped = s.replace('"', "\\\"");
+        format!("\"{escaped}\"")
     } else {
         s.to_string()
     }
 }
 
-/// 根据全部站点生成完整 Caddyfile 文本。
-pub fn generate_caddyfile(sites: &[Site], admin_addr: &str) -> String {
+/// 根据全部站点生成完整 Caddyfile 文本（末尾自动附加 Adminer 站点块）。
+///
+/// `adminer_root` 为 Adminer PHP 文件所在目录的绝对路径。
+pub fn generate_caddyfile(sites: &[Site], admin_addr: &str, adminer_root: &std::path::Path) -> String {
     let mut out = String::new();
     out.push_str("# 由 RunPHP 自动生成，请勿手动编辑\n");
     out.push_str(&global_block(admin_addr));
@@ -73,14 +77,39 @@ pub fn generate_caddyfile(sites: &[Site], admin_addr: &str) -> String {
         out.push_str(&site_block(s));
         out.push('\n');
     }
+    // Adminer 内置站点（固定端口，无需域名/hosts）
+    out.push_str(&format!(
+        ":{} {{\n    root * {}\n    encode gzip\n    php_server\n}}\n",
+        crate::adminer::ADMINER_PORT,
+        quote_path(adminer_root)
+    ));
     out
 }
 
 /// 将 Caddyfile 写入配置指定路径。
 pub fn write_caddyfile(cfg: &AppConfig, sites: &[Site]) -> Result<()> {
     std::fs::create_dir_all(&cfg.data_dir)?;
-    let content = generate_caddyfile(sites, "127.0.0.1:2019");
+    let adminer_root = cfg.data_dir.join("adminer");
+    let content = generate_caddyfile(sites, "127.0.0.1:2019", &adminer_root);
     std::fs::write(cfg.caddyfile_path(), content)?;
+    Ok(())
+}
+
+/// 写入 Caddyfile 并在 FrankenPHP 运行中时自动热重载。
+///
+/// 用于站点增删改后无需手动重启：写完配置后探测 admin API，
+/// 可达则执行 reload，不可达则跳过（进程未启动或已停止）。
+pub async fn write_and_reload(
+    cfg: &AppConfig,
+    sites: &[Site],
+    binary: &std::path::Path,
+) -> Result<()> {
+    write_caddyfile(cfg, sites)?;
+    if status().await {
+        if let Err(e) = reload(cfg, binary).await {
+            tracing::warn!("自动热重载失败（配置已写入磁盘）: {e}");
+        }
+    }
     Ok(())
 }
 
@@ -91,16 +120,40 @@ pub struct ProcessInfo {
     pub log_path: PathBuf,
 }
 
-/// 启动 FrankenPHP 子进程。
+/// 模块级进程监控状态：持有子进程句柄与重启参数。
 ///
-/// 返回子进程句柄；调用方必须 `await` 它以保持运行（否则因 `kill_on_drop`
-/// 退出时子进程会被终止）。日志写入 `logs_dir()/frankenphp.log`。
-pub async fn start(cfg: &AppConfig, binary: &std::path::Path) -> Result<(ProcessInfo, tokio::process::Child)> {
+/// 通过 `tokio::sync::Mutex` 保护，`start` 时存入、`stop` 时清空。
+/// 监控任务在子进程意外退出时自动重启（最多 5 次/30 秒）。
+#[allow(dead_code)]
+struct Supervisor {
+    /// 子进程句柄（去掉 kill_on_drop，由 supervisor 管理生命周期）。
+    child: tokio::process::Child,
+    /// 二进制路径（重启时使用）。
+    binary: PathBuf,
+    /// 配置快照（重启时使用）。
+    cfg: AppConfig,
+    /// 主动停止标志：true 表示用户调用了 stop，不重启。
+    stopping: Arc<AtomicBool>,
+}
+
+/// 全局唯一的 supervisor 实例。
+static SUPERVISOR: Mutex<Option<Supervisor>> = Mutex::const_new(None);
+
+/// 自动重启参数：30 秒内最多 5 次，超过则放弃。
+const RESTART_MAX: u32 = 5;
+const RESTART_WINDOW_SECS: u64 = 30;
+const RESTART_DELAY_SECS: u64 = 2;
+
+/// 启动 FrankenPHP 子进程，并注册崩溃自动重启监控。
+///
+/// 监控任务在后台等待子进程退出：若为意外退出（非用户主动 stop），
+/// 间隔 2 秒后自动重启，30 秒窗口内最多重试 5 次。
+pub async fn start(cfg: &AppConfig, binary: &std::path::Path) -> Result<ProcessInfo> {
     let caddyfile = cfg.caddyfile_path();
+    // Caddyfile 不存在时自动生成一份空配置（含 Adminer 站点块），
+    // 允许无站点状态下启动 FrankenPHP 以使用 Adminer 数据库管理。
     if !caddyfile.exists() {
-        return Err(Error::Caddy(
-            "Caddyfile 尚未生成，请先创建站点".into(),
-        ));
+        write_caddyfile(cfg, &[])?;
     }
     let log_path = cfg.logs_dir().join("frankenphp.log");
     std::fs::create_dir_all(cfg.logs_dir())?;
@@ -115,7 +168,6 @@ pub async fn start(cfg: &AppConfig, binary: &std::path::Path) -> Result<(Process
         .arg(&caddyfile)
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(stderr))
-        .kill_on_drop(true)
         .spawn()
         .map_err(|e| Error::Caddy(format!("启动 FrankenPHP 失败: {e}")))?;
 
@@ -127,15 +179,142 @@ pub async fn start(cfg: &AppConfig, binary: &std::path::Path) -> Result<(Process
     let pid_file = cfg.data_dir.join("frankenphp.pid");
     std::fs::write(&pid_file, pid.to_string())?;
 
-    Ok((ProcessInfo { pid, log_path }, child))
+    // 存入 supervisor 并启动监控任务
+    let stopping = Arc::new(AtomicBool::new(false));
+    let mut guard = SUPERVISOR.lock().await;
+    // 若已有旧 supervisor，先清理（替换场景）
+    if let Some(old) = guard.take() {
+        drop(old);
+    }
+    *guard = Some(Supervisor {
+        child,
+        binary: binary.to_path_buf(),
+        cfg: cfg.clone(),
+        stopping: stopping.clone(),
+    });
+    drop(guard);
+
+    // 启动崩溃监控任务
+    spawn_monitor(stopping, binary.to_path_buf(), cfg.clone(), log_path.clone());
+
+    Ok(ProcessInfo { pid, log_path })
+}
+
+/// 崩溃监控任务：等待子进程退出，意外退出时自动重启。
+fn spawn_monitor(
+    stopping: Arc<AtomicBool>,
+    binary: PathBuf,
+    cfg: AppConfig,
+    log_path: PathBuf,
+) {
+    tokio::spawn(async move {
+        let mut restart_count: u32 = 0;
+        let window_start = std::time::Instant::now();
+
+        loop {
+            // 等待当前子进程退出
+            {
+                let mut guard = SUPERVISOR.lock().await;
+                if let Some(sup) = guard.as_mut() {
+                    let _ = sup.child.wait().await;
+                } else {
+                    // supervisor 已被 stop 清空，退出监控
+                    return;
+                }
+            }
+
+            // 检查是否为主动停止
+            if stopping.load(Ordering::SeqCst) {
+                tracing::info!("FrankenPHP 主动停止，不重启");
+                return;
+            }
+
+            // 意外退出，尝试重启
+            let elapsed = window_start.elapsed().as_secs();
+            if elapsed >= RESTART_WINDOW_SECS {
+                restart_count = 0;
+            }
+            restart_count += 1;
+            if restart_count > RESTART_MAX {
+                tracing::error!(
+                    "FrankenPHP 在 {RESTART_WINDOW_SECS} 秒内崩溃 {restart_count} 次，放弃自动重启"
+                );
+                // 清空 supervisor
+                let mut guard = SUPERVISOR.lock().await;
+                *guard = None;
+                let pid_file = cfg.data_dir.join("frankenphp.pid");
+                std::fs::remove_file(&pid_file).ok();
+                return;
+            }
+
+            tracing::warn!(
+                "FrankenPHP 意外退出，{RESTART_DELAY_SECS} 秒后自动重启（第 {restart_count}/{RESTART_MAX} 次）"
+            );
+            tokio::time::sleep(std::time::Duration::from_secs(RESTART_DELAY_SECS)).await;
+
+            // 再次检查是否在此期间被主动停止
+            if stopping.load(Ordering::SeqCst) {
+                return;
+            }
+
+            // 重新启动
+            let caddyfile = cfg.caddyfile_path();
+            let log_file = match std::fs::File::create(&log_path) {
+                Ok(f) => f,
+                Err(e) => {
+                    tracing::error!("重启时创建日志文件失败: {e}");
+                    return;
+                }
+            };
+            let stderr = log_file.try_clone().ok();
+            let mut cmd = Command::new(&binary);
+            cmd.arg("run")
+                .arg("--config")
+                .arg(&caddyfile)
+                .stdout(Stdio::from(log_file));
+            if let Some(err) = stderr {
+                cmd.stderr(Stdio::from(err));
+            }
+            let child = match cmd.spawn() {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("自动重启失败: {e}");
+                    return;
+                }
+            };
+
+            let pid = child.id().unwrap_or(0);
+            if pid > 0 {
+                let pid_file = cfg.data_dir.join("frankenphp.pid");
+                std::fs::write(&pid_file, pid.to_string()).ok();
+            }
+
+            let mut guard = SUPERVISOR.lock().await;
+            *guard = Some(Supervisor {
+                child,
+                binary: binary.clone(),
+                cfg: cfg.clone(),
+                stopping: stopping.clone(),
+            });
+            drop(guard);
+        }
+    });
 }
 
 /// 通过 admin API 停止运行中的 FrankenPHP。
 ///
-/// 先尝试 admin API `/stop`，然后读取 PID 文件，
-/// 如果进程仍在运行则兜底 kill。
+/// 先设置 supervisor 的停止标志（避免崩溃监控任务自动重启），
+/// 然后尝试 admin API `/stop`，兜底读取 PID 文件 kill。
 pub async fn stop(cfg: &AppConfig) -> Result<()> {
     let pid_file = cfg.data_dir.join("frankenphp.pid");
+
+    // 标记为主动停止，阻止监控任务重启
+    {
+        let guard = SUPERVISOR.lock().await;
+        if let Some(sup) = guard.as_ref() {
+            sup.stopping.store(true, Ordering::SeqCst);
+        }
+    }
 
     // 尝试 admin API 停止
     let client = reqwest::Client::new();
@@ -155,6 +334,10 @@ pub async fn stop(cfg: &AppConfig) -> Result<()> {
         }
         std::fs::remove_file(&pid_file).ok();
     }
+
+    // 清空 supervisor（丢弃子进程句柄）
+    let mut guard = SUPERVISOR.lock().await;
+    *guard = None;
     Ok(())
 }
 
@@ -251,7 +434,7 @@ mod tests {
     fn 多站点全量生成() {
         let s1 = Site::new("a".into(), vec!["a.test".into()], PathBuf::from("/a"));
         let s2 = Site::new("b".into(), vec!["b.test".into()], PathBuf::from("/b"));
-        let out = generate_caddyfile(&[s1, s2], "127.0.0.1:2019");
+        let out = generate_caddyfile(&[s1, s2], "127.0.0.1:2019", std::path::Path::new("/tmp/adminer"));
         assert!(out.contains("a.test"));
         assert!(out.contains("b.test"));
         assert!(out.contains("frankenphp"));

@@ -231,6 +231,38 @@ impl RuntimeManager {
     }
 }
 
+/// GitHub Releases API 地址（用于拉取可安装版本列表）。
+const RELEASES_API: &str =
+    "https://api.github.com/repos/dunglas/frankenphp/releases?per_page=50";
+
+/// 拉取 GitHub Releases 发布的可安装版本列表（跳过 draft，新版本在前）。
+pub async fn available_versions() -> Result<Vec<String>> {
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("RunPHP/", env!("CARGO_PKG_VERSION")))
+        .build()?;
+    let resp = client
+        .get(RELEASES_API)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        return Err(Error::Runtime(format!(
+            "获取版本列表失败: HTTP {}",
+            resp.status()
+        )));
+    }
+    let releases: Vec<serde_json::Value> = resp.json().await?;
+    Ok(releases
+        .into_iter()
+        .filter(|r| !r.get("draft").and_then(|d| d.as_bool()).unwrap_or(false))
+        .filter_map(|r| {
+            r.get("tag_name")
+                .and_then(|t| t.as_str())
+                .map(|t| t.trim_start_matches('v').to_string())
+        })
+        .collect())
+}
+
 /// 解压 zip 到目标目录。
 fn extract_zip(zip_path: &Path, dest: &Path) -> Result<()> {
     let file = std::fs::File::open(zip_path)?;

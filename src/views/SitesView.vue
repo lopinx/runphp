@@ -3,6 +3,7 @@ import { onMounted, ref, computed, h } from "vue";
 import { useAppStore } from "../stores/app";
 import type { Site, WorkerConfig } from "../api";
 import { useMessage, useDialog, NButton } from "naive-ui";
+import DirectoryPicker from "../components/DirectoryPicker.vue";
 
 const store = useAppStore();
 const message = useMessage();
@@ -10,6 +11,7 @@ const dialog = useDialog();
 
 // 编辑模态框状态
 const showEdit = ref(false);
+const showRootPicker = ref(false);
 const editing = ref<Site | null>(null);
 const saving = ref(false);
 
@@ -193,9 +195,17 @@ const columns = computed(() => [
           />
         </n-form-item>
         <n-form-item label="根目录">
-          <n-input
-            v-model:value="formRoot"
-            placeholder="网站根目录绝对路径"
+          <div style="display: flex; gap: 8px; width: 100%">
+            <n-input
+              v-model:value="formRoot"
+              placeholder="网站根目录绝对路径，可点「浏览」选择"
+              style="flex: 1"
+            />
+            <n-button @click="showRootPicker = true">浏览</n-button>
+          </div>
+          <DirectoryPicker
+            v-model:show="showRootPicker"
+            @select="(p: string) => (formRoot = p)"
           />
         </n-form-item>
         <n-form-item label="端口">

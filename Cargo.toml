@@ -26,6 +26,15 @@ dirs = "6"
 chrono = { version = "0.4", features = ["serde"] }
 # 唯一标识
 uuid = { version = "1", features = ["v4", "serde"] }
+# TLS/SSL（数据库加密连接）
+tokio-rustls = "0.26"
+rustls = { version = "0.23", features = ["ring"] }
+rustls-pemfile = "2"
+webpki-roots = "0.26"
+tokio-postgres-rustls = "0.14"
+# SSH 隧道（纯 Rust SSH 客户端）
+russh = "0.46"
+russh-keys = "0.46"
 
 [profile.release]
 lto = "thin"
