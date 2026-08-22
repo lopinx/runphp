@@ -145,6 +145,9 @@ enum FtpCmd {
         /// SSH 私钥路径（仅 SFTP）
         #[arg(long)]
         key: Option<String>,
+        /// 限定作用范围目录（留空不限定，如 /var/www）
+        #[arg(long)]
+        root: Option<String>,
     },
     /// 删除 FTP 连接档案
     Rm {
@@ -477,6 +480,7 @@ async fn main() {
                     username,
                     password,
                     key,
+                    root,
                 } => {
                     let proto = match protocol.to_lowercase().as_str() {
                         "sftp" => FtpProtocol::Sftp,
@@ -488,6 +492,7 @@ async fn main() {
                         password: password.clone(),
                         ssh_key: key.clone(),
                         ssh_password: None,
+                        root_dir: root.filter(|r| !r.trim().is_empty()),
                         ..FtpProfile::new(name, proto, host, port.unwrap_or(0))
                     };
                     match mgr.add_profile(p) {

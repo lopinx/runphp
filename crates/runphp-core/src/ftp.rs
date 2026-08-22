@@ -65,6 +65,11 @@ pub struct FtpProfile {
     /// SSH 密码（仅 SFTP，与 ssh_key 二选一）。
     #[serde(default)]
     pub ssh_password: Option<String>,
+    /// 限定作用范围目录（chroot 根）。
+    /// 留空或 "/" 表示不限定；否则所有远程路径都会被归一化到此目录下，
+    /// 任何试图通过 `..` 跳出此目录的请求都会被拒绝。
+    #[serde(default)]
+    pub root_dir: Option<String>,
     /// 创建时间。
     pub created_at: String,
 }
@@ -82,8 +87,48 @@ impl FtpProfile {
             password: String::new(),
             ssh_key: None,
             ssh_password: None,
+            root_dir: None,
             created_at: chrono::Utc::now().to_rfc3339(),
         }
+    }
+
+    /// 返回归一化后的限定根目录：空值视为 `/`。
+    fn effective_root(&self) -> String {
+        match &self.root_dir {
+            Some(r) if !r.trim().is_empty() => normalize_remote_path(r),
+            _ => "/".to_string(),
+        }
+    }
+
+    /// 将用户输入的远程路径归一化到限定根目录下，并拒绝越界访问。
+    fn resolve_remote(&self, input: &str) -> Result<String, Error> {
+        let root = self.effective_root();
+        // 输入为空或根标记，直接返回限定根
+        if input.is_empty() || input == "/" {
+            return Ok(root.clone());
+        }
+        let combined = if input.starts_with('/') {
+            // 绝对路径：挂到限定根下（忽略其前导 /）
+            if root == "/" {
+                input.to_string()
+            } else {
+                format!("{}{}", root.trim_end_matches('/'), input)
+            }
+        } else {
+            format!("{}/{}", root.trim_end_matches('/'), input)
+        };
+        let normalized = normalize_remote_path(&combined);
+        // 越界检查：归一化结果必须等于限定根或位于其下
+        let in_scope = normalized == root
+            || root == "/"
+            || normalized.starts_with(&format!("{}/", root));
+        if !in_scope {
+            return Err(Error::Other(format!(
+                "路径越界：{} 超出限定根目录 {}",
+                input, root
+            )));
+        }
+        Ok(normalized)
     }
 }
 
@@ -253,17 +298,19 @@ impl FtpManager {
         }
     }
 
-    /// 测试连接（连接 + 列根目录）。
+    /// 测试连接（连接 + 列限定根目录）。
     pub async fn test_connection(profile: &FtpProfile) -> Result<String, Error> {
         let client = Self::connect(profile).await?;
-        let _ = Self::list_dir_with(client, "/").await?;
+        let root = profile.effective_root();
+        let _ = Self::list_dir_with(client, &root).await?;
         Ok(format!("{:?} 连接成功", profile.protocol))
     }
 
-    /// 列出远程目录内容。
+    /// 列出远程目录内容。`path` 会被归一化到限定根目录下。
     pub async fn list_dir(profile: &FtpProfile, path: &str) -> Result<Vec<FtpEntry>, Error> {
         let client = Self::connect(profile).await?;
-        Self::list_dir_with(client, path).await
+        let resolved = profile.resolve_remote(path)?;
+        Self::list_dir_with(client, &resolved).await
     }
 
     async fn list_dir_with(
@@ -329,6 +376,7 @@ impl FtpManager {
         remote_path: &str,
         progress: ProgressFn<'_>,
     ) -> Result<(), Error> {
+        let remote_path = profile.resolve_remote(remote_path)?;
         let file_name = std::path::Path::new(local_path)
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
@@ -338,6 +386,18 @@ impl FtpManager {
             .map(|m| m.len())
             .unwrap_or(0);
         let client = Self::connect(profile).await?;
+        Self::upload_with_client(client, local_path, &remote_path, &file_name, total, progress).await
+    }
+
+    /// 已解析远程路径 + 已建立连接的内部上传，供 `upload` 与 `upload_dir_inner` 复用。
+    async fn upload_with_client(
+        client: FtpClient,
+        local_path: &str,
+        remote_path: &str,
+        file_name: &str,
+        total: u64,
+        progress: ProgressFn<'_>,
+    ) -> Result<(), Error> {
         let mut transferred: u64 = 0;
         match client {
             FtpClient::Ftp(mut ftp) => {
@@ -355,7 +415,7 @@ impl FtpManager {
                     stream.write_all(&buf[..n]).await.map_err(ftp_io_err)?;
                     transferred += n as u64;
                     if let Some(cb) = progress {
-                        cb(transferred, total, &file_name);
+                        cb(transferred, total, file_name);
                     }
                 }
                 ftp.finalize_put_stream(stream).await.map_err(ftp_err)?;
@@ -375,7 +435,7 @@ impl FtpManager {
                     stream.write_all(&buf[..n]).await.map_err(ftp_io_err)?;
                     transferred += n as u64;
                     if let Some(cb) = progress {
-                        cb(transferred, total, &file_name);
+                        cb(transferred, total, file_name);
                     }
                 }
                 ftp.finalize_put_stream(stream).await.map_err(ftp_err)?;
@@ -397,7 +457,7 @@ impl FtpManager {
                     remote.write_all(&buf[..n]).await.map_err(sftp_err_io)?;
                     transferred += n as u64;
                     if let Some(cb) = progress {
-                        cb(transferred, total, &file_name);
+                        cb(transferred, total, file_name);
                     }
                 }
                 remote.flush().await.map_err(sftp_err_io)?;
@@ -415,7 +475,8 @@ impl FtpManager {
         local_path: &str,
         progress: ProgressFn<'_>,
     ) -> Result<(), Error> {
-        let file_name = std::path::Path::new(remote_path)
+        let remote_path = profile.resolve_remote(remote_path)?;
+        let file_name = std::path::Path::new(&remote_path)
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
@@ -424,8 +485,8 @@ impl FtpManager {
         match client {
             FtpClient::Ftp(mut ftp) => {
                 ftp.transfer_type(FileType::Binary).await.map_err(ftp_err)?;
-                let total = ftp.size(remote_path).await.unwrap_or(0) as u64;
-                let stream = ftp.retr_as_stream(remote_path).await.map_err(ftp_err)?;
+                let total = ftp.size(&remote_path).await.unwrap_or(0) as u64;
+                let stream = ftp.retr_as_stream(&remote_path).await.map_err(ftp_err)?;
                 let mut stream = stream;
                 let mut file = tokio::fs::File::create(local_path)
                     .await
@@ -447,8 +508,8 @@ impl FtpManager {
             }
             FtpClient::Ftps(mut ftp) => {
                 ftp.transfer_type(FileType::Binary).await.map_err(ftp_err)?;
-                let total = ftp.size(remote_path).await.unwrap_or(0) as u64;
-                let stream = ftp.retr_as_stream(remote_path).await.map_err(ftp_err)?;
+                let total = ftp.size(&remote_path).await.unwrap_or(0) as u64;
+                let stream = ftp.retr_as_stream(&remote_path).await.map_err(ftp_err)?;
                 let mut stream = stream;
                 let mut file = tokio::fs::File::create(local_path)
                     .await
@@ -470,11 +531,11 @@ impl FtpManager {
             }
             FtpClient::Sftp(sftp) => {
                 let total = sftp
-                    .metadata(remote_path)
+                    .metadata(&remote_path)
                     .await
                     .map(|m| m.len())
                     .unwrap_or(0);
-                let mut remote = sftp.open(remote_path).await.map_err(sftp_err)?;
+                let mut remote = sftp.open(&remote_path).await.map_err(sftp_err)?;
                 let mut file = tokio::fs::File::create(local_path)
                     .await
                     .map_err(Error::Io)?;
@@ -506,7 +567,8 @@ impl FtpManager {
         remote_dir: &str,
         progress: ProgressFn<'_>,
     ) -> Result<(), Error> {
-        Self::upload_dir_inner(profile, std::path::Path::new(local_dir), remote_dir, progress)
+        let remote_dir = profile.resolve_remote(remote_dir)?;
+        Self::upload_dir_inner(profile, std::path::Path::new(local_dir), &remote_dir, progress)
             .await
     }
 
@@ -516,8 +578,10 @@ impl FtpManager {
         remote_dir: &str,
         progress: ProgressFn<'_>,
     ) -> Result<(), Error> {
-        // 确保远程目录存在（忽略已存在错误）
-        let _ = Self::make_dir(profile, remote_dir).await;
+        // 确保远程目录存在（忽略已存在错误）；路径已由调用方 resolve，这里直接建
+        if let Ok(client) = Self::connect(profile).await {
+            let _ = Self::make_dir_with_client(client, remote_dir).await;
+        }
 
         let mut entries = tokio::fs::read_dir(local_dir)
             .await
@@ -531,16 +595,37 @@ impl FtpManager {
                 Box::pin(Self::upload_dir_inner(profile, &local_path, &remote_path, progress))
                     .await?;
             } else if file_type.is_file() {
-                Self::upload(profile, &local_path.to_string_lossy(), &remote_path, progress)
-                    .await?;
+                let file_name = std::path::Path::new(&local_path)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let total = tokio::fs::metadata(&local_path)
+                    .await
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                let client = Self::connect(profile).await?;
+                Self::upload_with_client(
+                    client,
+                    &local_path.to_string_lossy(),
+                    &remote_path,
+                    &file_name,
+                    total,
+                    progress,
+                )
+                .await?;
             }
         }
         Ok(())
     }
 
-    /// 删除文件或目录。
+    /// 删除文件或目录。`path` 会被归一化到限定根目录下。
     pub async fn delete(profile: &FtpProfile, path: &str, is_dir: bool) -> Result<(), Error> {
+        let path = profile.resolve_remote(path)?;
         let client = Self::connect(profile).await?;
+        Self::delete_with_client(client, &path, is_dir).await
+    }
+
+    async fn delete_with_client(client: FtpClient, path: &str, is_dir: bool) -> Result<(), Error> {
         match client {
             FtpClient::Ftp(mut ftp) => {
                 if is_dir {
@@ -567,9 +652,14 @@ impl FtpManager {
         Ok(())
     }
 
-    /// 创建目录。
+    /// 创建目录。`path` 会被归一化到限定根目录下。
     pub async fn make_dir(profile: &FtpProfile, path: &str) -> Result<(), Error> {
+        let path = profile.resolve_remote(path)?;
         let client = Self::connect(profile).await?;
+        Self::make_dir_with_client(client, &path).await
+    }
+
+    async fn make_dir_with_client(client: FtpClient, path: &str) -> Result<(), Error> {
         match client {
             FtpClient::Ftp(mut ftp) => {
                 ftp.mkdir(path).await.map_err(ftp_err)?;
@@ -584,18 +674,20 @@ impl FtpManager {
         Ok(())
     }
 
-    /// 重命名文件或目录。
+    /// 重命名文件或目录。`from`/`to` 会被归一化到限定根目录下。
     pub async fn rename(profile: &FtpProfile, from: &str, to: &str) -> Result<(), Error> {
+        let from = profile.resolve_remote(from)?;
+        let to = profile.resolve_remote(to)?;
         let client = Self::connect(profile).await?;
         match client {
             FtpClient::Ftp(mut ftp) => {
-                ftp.rename(from, to).await.map_err(ftp_err)?;
+                ftp.rename(&from, &to).await.map_err(ftp_err)?;
             }
             FtpClient::Ftps(mut ftp) => {
-                ftp.rename(from, to).await.map_err(ftp_err)?;
+                ftp.rename(&from, &to).await.map_err(ftp_err)?;
             }
             FtpClient::Sftp(sftp) => {
-                sftp.rename(from, to).await.map_err(sftp_err)?;
+                sftp.rename(&from, &to).await.map_err(sftp_err)?;
             }
         }
         Ok(())
@@ -697,6 +789,24 @@ fn parse_ftp_list(lines: &[String]) -> Vec<FtpEntry> {
 
 /// 通过 suppaftp 上传文件（STOR）——已内联至 upload，此处保留占位以维持模块可读性。
 /// 实际上传逻辑见 `FtpManager::upload`。
+
+/// 归一化远程路径：合并 `.`/`..` 段、折叠多余斜杠、保证以 `/` 开头。
+///
+/// 例：`/a/b/../c/./d` → `/a/c/d`，`a//b` → `/a/b`。
+fn normalize_remote_path(input: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in input.split('/') {
+        match seg {
+            "" | "." => continue,
+            ".." => {
+                parts.pop();
+            }
+            s => parts.push(s),
+        }
+    }
+    let joined = parts.join("/");
+    format!("/{}", joined)
+}
 
 /// suppaftp 错误转核心错误。
 fn ftp_err(e: FtpError) -> Error {
@@ -826,5 +936,65 @@ mod tests {
         assert!(reg.get("nope").is_none());
         reg.get_mut(&id).unwrap().name = "y".into();
         assert_eq!(reg.get(&id).unwrap().name, "y");
+    }
+
+    #[test]
+    fn normalize_remote_path_basic() {
+        assert_eq!(normalize_remote_path("/a/b/../c"), "/a/c");
+        assert_eq!(normalize_remote_path("a//b/./c"), "/a/b/c");
+        assert_eq!(normalize_remote_path("/a/../../b"), "/b");
+        assert_eq!(normalize_remote_path(""), "/");
+        assert_eq!(normalize_remote_path("/"), "/");
+        assert_eq!(normalize_remote_path("/var/www/"), "/var/www");
+    }
+
+    #[test]
+    fn resolve_remote_no_root() {
+        // 无限定根目录时，绝对路径直接归一化
+        let p = FtpProfile::new("x".into(), FtpProtocol::Ftp, "h".into(), 21);
+        assert_eq!(p.resolve_remote("/a/b/../c").unwrap(), "/a/c");
+        assert_eq!(p.resolve_remote("a//b").unwrap(), "/a/b");
+        assert_eq!(p.resolve_remote("/").unwrap(), "/");
+        assert_eq!(p.resolve_remote("").unwrap(), "/");
+    }
+
+    #[test]
+    fn resolve_remote_with_root() {
+        let mut p = FtpProfile::new("x".into(), FtpProtocol::Ftp, "h".into(), 21);
+        p.root_dir = Some("/var/www".into());
+        // 相对路径拼到根下
+        assert_eq!(p.resolve_remote("site").unwrap(), "/var/www/site");
+        // 绝对路径挂到根下
+        assert_eq!(p.resolve_remote("/site/index.html").unwrap(), "/var/www/site/index.html");
+        // 根标记返回限定根
+        assert_eq!(p.resolve_remote("/").unwrap(), "/var/www");
+        // 越界访问被拒绝
+        assert!(p.resolve_remote("../etc/passwd").is_err());
+        assert!(p.resolve_remote("/../etc").is_err());
+        // 带点的路径归一化但不越界
+        assert_eq!(p.resolve_remote("site/./sub/../").unwrap(), "/var/www/site");
+    }
+
+    #[test]
+    fn resolve_remote_root_with_trailing_slash() {
+        let mut p = FtpProfile::new("x".into(), FtpProtocol::Ftp, "h".into(), 21);
+        p.root_dir = Some("/var/www/".into());
+        assert_eq!(p.resolve_remote("site").unwrap(), "/var/www/site");
+        assert_eq!(p.resolve_remote("/").unwrap(), "/var/www");
+    }
+
+    #[test]
+    fn resolve_remote_root_normalize() {
+        let mut p = FtpProfile::new("x".into(), FtpProtocol::Ftp, "h".into(), 21);
+        p.root_dir = Some("/a/../var/www".into());
+        assert_eq!(p.effective_root(), "/var/www");
+    }
+
+    #[test]
+    fn resolve_remote_empty_root_string() {
+        let mut p = FtpProfile::new("x".into(), FtpProtocol::Ftp, "h".into(), 21);
+        p.root_dir = Some("  ".into());
+        // 空白串视为不限定
+        assert_eq!(p.resolve_remote("/a/b").unwrap(), "/a/b");
     }
 }
