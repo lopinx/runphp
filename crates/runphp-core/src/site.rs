@@ -16,6 +16,15 @@ pub struct WorkerConfig {
     pub num: u32,
 }
 
+/// 站点关联的受管数据库（服务端管理产生的库）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SiteDbBinding {
+    /// 受管服务 id（services.json 中的条目）。
+    pub service_id: String,
+    /// 数据库名。
+    pub database: String,
+}
+
 /// 单个站点配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Site {
@@ -35,6 +44,9 @@ pub struct Site {
     pub worker: Option<WorkerConfig>,
     /// PHP ini 覆盖指令，每行一条如 `memory_limit = 256M`。
     pub php_ini: Vec<String>,
+    /// 关联的受管数据库（向后兼容缺省为空）。
+    #[serde(default)]
+    pub databases: Vec<SiteDbBinding>,
     /// 创建时间（RFC3339）。
     pub created_at: String,
     /// 更新时间（RFC3339）。
@@ -54,6 +66,7 @@ impl Site {
             https: false,
             worker: None,
             php_ini: Vec::new(),
+            databases: Vec::new(),
             created_at: now.clone(),
             updated_at: now,
         }
@@ -151,5 +164,28 @@ mod tests {
         let removed = reg.remove(&s1.id);
         assert!(removed.is_some());
         assert!(reg.sites.is_empty());
+    }
+
+    #[test]
+    fn 旧版站点json缺省databases字段兼容() {
+        // 旧版 sites.json 没有 databases 字段，反序列化应得到空列表
+        let raw = r#"{
+            "id": "s1", "name": "旧站", "domains": ["old.test"], "port": 0,
+            "root": "/tmp/old", "https": false, "worker": null, "php_ini": [],
+            "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"
+        }"#;
+        let site: Site = serde_json::from_str(raw).unwrap();
+        assert!(site.databases.is_empty());
+
+        // 新版带绑定字段可正常往返
+        let mut s = Site::new("新站".into(), vec!["new.test".into()], PathBuf::from("/tmp/new"));
+        s.databases.push(SiteDbBinding {
+            service_id: "svc-1".into(),
+            database: "shop".into(),
+        });
+        let json = serde_json::to_string(&s).unwrap();
+        let back: Site = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.databases.len(), 1);
+        assert_eq!(back.databases[0].database, "shop");
     }
 }

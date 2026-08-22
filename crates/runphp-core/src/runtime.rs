@@ -387,7 +387,7 @@ pub async fn available_versions() -> Result<Vec<String>> {
 }
 
 /// 解压 zip 到目标目录。
-fn extract_zip(zip_path: &Path, dest: &Path) -> Result<()> {
+pub(crate) fn extract_zip(zip_path: &Path, dest: &Path) -> Result<()> {
     let file = std::fs::File::open(zip_path)?;
     let mut archive = zip::ZipArchive::new(file)?;
     for i in 0..archive.len() {

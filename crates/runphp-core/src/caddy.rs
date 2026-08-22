@@ -343,7 +343,7 @@ pub async fn stop(cfg: &AppConfig) -> Result<()> {
 
 /// 跨平台终止进程。
 #[cfg(unix)]
-fn kill_process(pid: u32) {
+pub(crate) fn kill_process(pid: u32) {
     // SIGTERM
     unsafe {
         libc::kill(pid as i32, libc::SIGTERM);
@@ -352,7 +352,7 @@ fn kill_process(pid: u32) {
 
 /// 跨平台终止进程（Windows）。
 #[cfg(not(unix))]
-fn kill_process(pid: u32) {
+pub(crate) fn kill_process(pid: u32) {
     use std::process::Command;
     // taskkill /F /PID <pid> /T 终止进程树
     let _ = Command::new("taskkill")

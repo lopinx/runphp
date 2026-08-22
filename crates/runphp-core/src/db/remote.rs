@@ -267,7 +267,7 @@ fn url_escape(s: &str) -> String {
 /// 将参数列表格式化为 Redis RESP 协议命令字符串。
 ///
 /// 例如 `["PING"]` → `*1\r\n$4\r\nPING\r\n`
-fn format_resp_command(args: &[&str]) -> String {
+pub(crate) fn format_resp_command(args: &[&str]) -> String {
     let mut out = format!("*{}\r\n", args.len());
     for arg in args {
         out.push_str(&format!("${}\r\n{}\r\n", arg.len(), arg));

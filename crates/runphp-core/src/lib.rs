@@ -12,6 +12,7 @@ pub mod fs;
 pub mod ftp;
 pub mod hosts;
 pub mod runtime;
+pub mod services;
 pub mod site;
 pub mod system;
 
