@@ -30,12 +30,6 @@ const router = createRouter({
       meta: { title: "FTP" },
     },
     {
-      path: "/hosts",
-      name: "hosts",
-      component: () => import("../views/HostsView.vue"),
-      meta: { title: "Hosts" },
-    },
-    {
       path: "/settings",
       name: "settings",
       component: () => import("../views/SettingsView.vue"),
