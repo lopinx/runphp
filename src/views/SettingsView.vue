@@ -2,6 +2,7 @@
 import { h, onMounted, ref } from "vue";
 import { useAppStore } from "../stores/app";
 import { NButton, NSelect, NTag, useMessage } from "naive-ui";
+import HostsCard from "../components/HostsCard.vue";
 import {
   runtimeSetDefault,
   runtimeVersions,
@@ -273,5 +274,8 @@ function isImported(binaryPath: string): boolean {
 
       </n-space>
     </n-card>
+
+    <!-- Hosts 管理 -->
+    <HostsCard />
   </n-space>
 </template>
