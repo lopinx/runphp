@@ -18,12 +18,14 @@ use axum::{
 use runphp_core::{
     adminer,
     caddy,
-    db::{remote::*, sqlite::*, LibsqlManager, LibsqlProfile},
+    db::{remote::*, service::*, sqlite::*, LibsqlManager, LibsqlProfile},
     detect,
     fs,
     ftp::{FtpManager, FtpProfile},
+    ftpd::{FtpdConfig, FtpdManager, FtpUser},
     hosts::{entries_from_sites, HostsManager},
     runtime,
+    services::ManagedService,
     system,
     AppConfig, RuntimeManager, Site,
 };
@@ -51,6 +53,8 @@ pub async fn serve(
     let addr = SocketAddr::new(host_parsed, port);
     let has_token = token.is_some();
     let state = Arc::new(PanelState { cfg, token });
+    // 自启动配置副本（state 稍后被 move 进 Router）
+    let auto_cfg = state.cfg.clone();
 
     // REST API（与 Tauri command 同名同参）
     let api = Router::new()
@@ -92,6 +96,26 @@ pub async fn serve(
         .route("/db_libsql_tables", post(db_libsql_tables))
         .route("/db_libsql_query_table", post(db_libsql_query_table))
         .route("/db_libsql_execute", post(db_libsql_execute))
+        .route("/db_service_list", post(db_service_list))
+        .route("/db_service_detect", post(db_service_detect))
+        .route("/db_service_register", post(db_service_register))
+        .route("/db_service_update", post(db_service_update))
+        .route("/db_service_remove", post(db_service_remove))
+        .route("/db_service_start", post(db_service_start))
+        .route("/db_service_stop", post(db_service_stop))
+        .route("/db_service_status", post(db_service_status))
+        .route("/db_service_log", post(db_service_log))
+        .route("/db_service_download_presets", post(db_service_download_presets))
+        .route("/db_service_download", post(db_service_download))
+        .route("/db_service_register_connection", post(db_service_register_connection))
+        .route("/db_service_databases", post(db_service_databases))
+        .route("/db_service_database_create", post(db_service_database_create))
+        .route("/db_service_database_drop", post(db_service_database_drop))
+        .route("/db_service_users", post(db_service_users))
+        .route("/db_service_user_create", post(db_service_user_create))
+        .route("/db_service_user_drop", post(db_service_user_drop))
+        .route("/db_service_user_password", post(db_service_user_password))
+        .route("/db_service_root_password", post(db_service_root_password))
         .route("/runtime_detect_local", post(runtime_detect_local))
         .route("/runtime_import_local", post(runtime_import_local))
         .route("/runtime_versions", post(runtime_versions))
@@ -109,7 +133,17 @@ pub async fn serve(
         .route("/ftp_delete", post(ftp_delete))
         .route("/ftp_mkdir", post(ftp_mkdir))
         .route("/ftp_rename", post(ftp_rename))
-        .route("/ftp_update", post(ftp_update));
+        .route("/ftp_update", post(ftp_update))
+        .route("/ftp_server_status", post(ftp_server_status))
+        .route("/ftp_server_start", post(ftp_server_start))
+        .route("/ftp_server_stop", post(ftp_server_stop))
+        .route("/ftp_server_config", post(ftp_server_config))
+        .route("/ftp_server_update_config", post(ftp_server_update_config))
+        .route("/ftp_server_backend", post(ftp_server_backend))
+        .route("/ftp_user_list", post(ftp_user_list))
+        .route("/ftp_user_add", post(ftp_user_add))
+        .route("/ftp_user_update", post(ftp_user_update))
+        .route("/ftp_user_remove", post(ftp_user_remove));
 
     // 设置 token 时对 API 启用 Bearer 鉴权
     let api = if has_token {
@@ -135,6 +169,10 @@ pub async fn serve(
         .with_state(state);
 
     tracing::info!("Web 面板启动: http://{addr}");
+    // 自启动标记为自启的服务（数据库 + FTP），失败仅记日志
+    tokio::spawn(async move {
+        runphp_core::autostart_services(&auto_cfg).await;
+    });
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
@@ -328,6 +366,74 @@ struct FtpRenameReq {
     profile: FtpProfile,
     from: String,
     to: String,
+}
+
+#[derive(Deserialize)]
+struct DbServiceRegisterReq {
+    input: ServiceInput,
+}
+
+#[derive(Deserialize)]
+struct DbServiceUpdateReq {
+    service: ManagedService,
+}
+
+#[derive(Deserialize)]
+struct DbServiceLogReq {
+    id: String,
+    lines: Option<usize>,
+}
+
+#[derive(Deserialize)]
+struct DbServiceDownloadReq {
+    kind: runphp_core::services::ServiceKind,
+    name: String,
+    url: String,
+}
+
+#[derive(Deserialize)]
+struct DbNameReq {
+    id: String,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct DbUserCreateReq {
+    id: String,
+    username: String,
+    password: String,
+    database: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct DbUserReq {
+    id: String,
+    username: String,
+    host: String,
+}
+
+#[derive(Deserialize)]
+struct DbPasswordReq {
+    id: String,
+    password: String,
+}
+
+#[derive(Deserialize)]
+struct DbUserPasswordReq {
+    id: String,
+    username: String,
+    host: String,
+    password: String,
+}
+
+#[derive(Deserialize)]
+struct FtpUserReq {
+    user: FtpUser,
+}
+
+#[derive(Deserialize)]
+struct FtpdConfigReq {
+    config: FtpdConfig,
 }
 
 type S = State<Arc<PanelState>>;
@@ -738,6 +844,153 @@ async fn db_libsql_execute(Json(req): Json<LibsqlExecuteReq>) -> Response {
     }
 }
 
+// ---- 数据库服务管理（服务端） ----
+
+fn db_svc_mgr(cfg: &AppConfig) -> DbServiceManager {
+    DbServiceManager::new(cfg.clone())
+}
+
+async fn db_service_list(State(s): S) -> Json<Value> {
+    let list = db_svc_mgr(&s.cfg).list().unwrap_or_default();
+    Json(json!(list))
+}
+
+async fn db_service_detect(State(s): S) -> Response {
+    match db_svc_mgr(&s.cfg).detect().await {
+        Ok(c) => Json(json!(c)).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn db_service_register(State(s): S, Json(req): Json<DbServiceRegisterReq>) -> Response {
+    match db_svc_mgr(&s.cfg).register(req.input) {
+        Ok(svc) => Json(json!(svc)).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn db_service_update(State(s): S, Json(req): Json<DbServiceUpdateReq>) -> Response {
+    match db_svc_mgr(&s.cfg).update(req.service) {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn db_service_remove(State(s): S, Json(req): Json<IdReq>) -> Response {
+    match db_svc_mgr(&s.cfg).remove(&req.id).await {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn db_service_start(State(s): S, Json(req): Json<IdReq>) -> Response {
+    match db_svc_mgr(&s.cfg).start(&req.id).await {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn db_service_stop(State(s): S, Json(req): Json<IdReq>) -> Response {
+    match db_svc_mgr(&s.cfg).stop(&req.id).await {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn db_service_status(State(s): S, Json(req): Json<IdReq>) -> Response {
+    match db_svc_mgr(&s.cfg).status(&req.id).await {
+        Ok(st) => Json(json!(st)).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn db_service_log(State(s): S, Json(req): Json<DbServiceLogReq>) -> Response {
+    match db_svc_mgr(&s.cfg).read_log(&req.id, req.lines.unwrap_or(100)) {
+        Ok(t) => Json(json!(t)).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn db_service_download_presets() -> Json<Value> {
+    Json(json!(download_presets()))
+}
+
+async fn db_service_download(State(s): S, Json(req): Json<DbServiceDownloadReq>) -> Response {
+    match db_svc_mgr(&s.cfg).download_install(req.kind, &req.name, &req.url, None).await {
+        Ok(svc) => Json(json!(svc)).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn db_service_register_connection(State(s): S, Json(req): Json<IdReq>) -> Response {
+    match db_svc_mgr(&s.cfg).register_connection(&req.id) {
+        Ok(p) => Json(json!(p)).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn db_service_databases(State(s): S, Json(req): Json<IdReq>) -> Response {
+    match db_svc_mgr(&s.cfg).list_databases(&req.id).await {
+        Ok(list) => Json(json!(list)).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn db_service_database_create(State(s): S, Json(req): Json<DbNameReq>) -> Response {
+    match db_svc_mgr(&s.cfg).create_database(&req.id, &req.name).await {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn db_service_database_drop(State(s): S, Json(req): Json<DbNameReq>) -> Response {
+    match db_svc_mgr(&s.cfg).drop_database(&req.id, &req.name).await {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn db_service_users(State(s): S, Json(req): Json<IdReq>) -> Response {
+    match db_svc_mgr(&s.cfg).list_users(&req.id).await {
+        Ok(list) => Json(json!(list)).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn db_service_user_create(State(s): S, Json(req): Json<DbUserCreateReq>) -> Response {
+    match db_svc_mgr(&s.cfg)
+        .create_user(&req.id, &req.username, &req.password, req.database.as_deref())
+        .await
+    {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn db_service_user_drop(State(s): S, Json(req): Json<DbUserReq>) -> Response {
+    match db_svc_mgr(&s.cfg).drop_user(&req.id, &req.username, &req.host).await {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn db_service_user_password(State(s): S, Json(req): Json<DbUserPasswordReq>) -> Response {
+    match db_svc_mgr(&s.cfg)
+        .set_user_password(&req.id, &req.username, &req.host, &req.password)
+        .await
+    {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn db_service_root_password(State(s): S, Json(req): Json<DbPasswordReq>) -> Response {
+    match db_svc_mgr(&s.cfg).set_root_password(&req.id, &req.password).await {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
 // ---- FTP 管理 ----
 
 async fn ftp_list(State(s): S) -> Json<Value> {
@@ -821,6 +1074,73 @@ async fn ftp_mkdir(Json(req): Json<FtpMkdirReq>) -> Response {
 
 async fn ftp_rename(Json(req): Json<FtpRenameReq>) -> Response {
     match FtpManager::rename(&req.profile, &req.from, &req.to).await {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+// ---- FTP 服务端管理 ----
+
+fn ftpd_mgr(cfg: &AppConfig) -> FtpdManager {
+    FtpdManager::new(cfg.clone())
+}
+
+async fn ftp_server_status(State(s): S) -> Json<Value> {
+    Json(json!(ftpd_mgr(&s.cfg).status().await))
+}
+
+async fn ftp_server_start(State(s): S) -> Response {
+    match ftpd_mgr(&s.cfg).start().await {
+        Ok(backend) => Json(json!(backend)).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn ftp_server_stop(State(s): S) -> Response {
+    match ftpd_mgr(&s.cfg).stop().await {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn ftp_server_config(State(s): S) -> Json<Value> {
+    Json(json!(ftpd_mgr(&s.cfg).config()))
+}
+
+async fn ftp_server_update_config(State(s): S, Json(req): Json<FtpdConfigReq>) -> Response {
+    match ftpd_mgr(&s.cfg).save_config(&req.config) {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn ftp_server_backend(State(s): S) -> Json<Value> {
+    Json(json!(ftpd_mgr(&s.cfg).backend_name()))
+}
+
+async fn ftp_user_list(State(s): S) -> Response {
+    match ftpd_mgr(&s.cfg).list_users() {
+        Ok(users) => Json(json!(users)).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn ftp_user_add(State(s): S, Json(req): Json<FtpUserReq>) -> Response {
+    match ftpd_mgr(&s.cfg).add_user(req.user).await {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn ftp_user_update(State(s): S, Json(req): Json<FtpUserReq>) -> Response {
+    match ftpd_mgr(&s.cfg).update_user(req.user).await {
+        Ok(()) => Json(Value::Null).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn ftp_user_remove(State(s): S, Json(req): Json<IdReq>) -> Response {
+    match ftpd_mgr(&s.cfg).remove_user(&req.id).await {
         Ok(()) => Json(Value::Null).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     }

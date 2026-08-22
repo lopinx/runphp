@@ -5,12 +5,18 @@ use runphp_core::{
     caddy,
     db::libsql::{LibsqlManager, LibsqlProfile},
     db::remote::{ConnectionProfile, RemoteDbManager, RemoteQueryResult, RemoteTableInfo},
+    db::service::{
+        DbServiceCandidate, DbServiceManager, DownloadPreset, ServiceDbUser, ServiceInput,
+    },
     db::sqlite::{DatabaseFile, QueryResult, SqliteManager, TableInfo},
     detect::{self, LocalDetection},
     ftp::{FtpEntry, FtpManager, FtpProfile},
+    ftpd::{FtpdConfig, FtpdManager, FtpUser},
     fs,
     hosts::{entries_from_sites, HostEntry, HostsManager},
-    runtime::{self, ImportResult}, system, AppConfig, RuntimeManager, Site,
+    runtime::{self, ImportResult}, system,
+    services::{ManagedService, ServiceKind, ServiceStatus},
+    AppConfig, RuntimeManager, Site,
 };
 use tauri::Emitter;
 
@@ -423,9 +429,184 @@ async fn db_libsql_execute(profile: LibsqlProfile, sql: String) -> Result<QueryR
         .map_err(|e| e.to_string())
 }
 
-// ---- FTP 管理 ----
+// ---- 数据库服务管理（服务端） ----
 
-/// 列出 FTP 连接档案。
+/// 列出受管数据库服务。
+#[tauri::command]
+fn db_service_list() -> Result<Vec<ManagedService>, String> {
+    db_service_mgr().list().map_err(|e| e.to_string())
+}
+
+/// 数据库服务管理器实例。
+fn db_service_mgr() -> DbServiceManager {
+    DbServiceManager::new(cfg())
+}
+
+/// 检测本机数据库服务候选。
+#[tauri::command]
+async fn db_service_detect() -> Result<Vec<DbServiceCandidate>, String> {
+    db_service_mgr().detect().await.map_err(|e| e.to_string())
+}
+
+/// 注册服务（提供 binary_path 为便携托管，否则为接管）。
+#[tauri::command]
+fn db_service_register(input: ServiceInput) -> Result<ManagedService, String> {
+    db_service_mgr().register(input).map_err(|e| e.to_string())
+}
+
+/// 更新服务定义（端口/自启/凭据）。
+#[tauri::command]
+fn db_service_update(service: ManagedService) -> Result<(), String> {
+    db_service_mgr().update(service).map_err(|e| e.to_string())
+}
+
+/// 删除服务注册。
+#[tauri::command]
+async fn db_service_remove(id: String) -> Result<(), String> {
+    db_service_mgr().remove(&id).await.map_err(|e| e.to_string())
+}
+
+/// 启动服务（便携服务自动初始化数据目录，等待端口就绪）。
+#[tauri::command]
+async fn db_service_start(id: String) -> Result<(), String> {
+    db_service_mgr().start(&id).await.map_err(|e| e.to_string())
+}
+
+/// 停止服务。
+#[tauri::command]
+async fn db_service_stop(id: String) -> Result<(), String> {
+    db_service_mgr().stop(&id).await.map_err(|e| e.to_string())
+}
+
+/// 查询服务状态。
+#[tauri::command]
+async fn db_service_status(id: String) -> Result<ServiceStatus, String> {
+    db_service_mgr().status(&id).await.map_err(|e| e.to_string())
+}
+
+/// 读取服务日志末尾若干行。
+#[tauri::command]
+fn db_service_log(id: String, lines: Option<usize>) -> Result<String, String> {
+    db_service_mgr()
+        .read_log(&id, lines.unwrap_or(100))
+        .map_err(|e| e.to_string())
+}
+
+/// 便携包下载预设清单。
+#[tauri::command]
+fn db_service_download_presets() -> Vec<DownloadPreset> {
+    runphp_core::db::service::download_presets()
+}
+
+/// 下载便携包并注册服务，进度通过事件推送。
+#[tauri::command]
+async fn db_service_download(
+    kind: String,
+    name: String,
+    url: String,
+    app: tauri::AppHandle,
+) -> Result<ManagedService, String> {
+    let kind: ServiceKind = serde_json::from_value(serde_json::json!(kind))
+        .map_err(|e| format!("未知引擎类型: {e}"))?;
+    let progress_app = std::sync::Arc::new(app);
+    db_service_mgr()
+        .download_install(
+            kind,
+            &name,
+            &url,
+            Some(Box::new(move |d, t| {
+                let _ = progress_app.emit("db-service-download-progress", (d, t));
+            })),
+        )
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 把受管服务注册为连接档案（供连接页浏览/SQL/Adminer 复用）。
+#[tauri::command]
+fn db_service_register_connection(id: String) -> Result<ConnectionProfile, String> {
+    db_service_mgr()
+        .register_connection(&id)
+        .map_err(|e| e.to_string())
+}
+
+/// 列出服务中的用户数据库。
+#[tauri::command]
+async fn db_service_databases(id: String) -> Result<Vec<String>, String> {
+    db_service_mgr().list_databases(&id).await.map_err(|e| e.to_string())
+}
+
+/// 创建数据库。
+#[tauri::command]
+async fn db_service_database_create(id: String, name: String) -> Result<(), String> {
+    db_service_mgr()
+        .create_database(&id, &name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 删除数据库。
+#[tauri::command]
+async fn db_service_database_drop(id: String, name: String) -> Result<(), String> {
+    db_service_mgr()
+        .drop_database(&id, &name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 列出服务中的用户账号。
+#[tauri::command]
+async fn db_service_users(id: String) -> Result<Vec<ServiceDbUser>, String> {
+    db_service_mgr().list_users(&id).await.map_err(|e| e.to_string())
+}
+
+/// 创建账号（可同时授予某库全部权限）。
+#[tauri::command]
+async fn db_service_user_create(
+    id: String,
+    username: String,
+    password: String,
+    database: Option<String>,
+) -> Result<(), String> {
+    db_service_mgr()
+        .create_user(&id, &username, &password, database.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 删除账号。
+#[tauri::command]
+async fn db_service_user_drop(id: String, username: String, host: String) -> Result<(), String> {
+    db_service_mgr()
+        .drop_user(&id, &username, &host)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 修改账号密码。
+#[tauri::command]
+async fn db_service_user_password(
+    id: String,
+    username: String,
+    host: String,
+    password: String,
+) -> Result<(), String> {
+    db_service_mgr()
+        .set_user_password(&id, &username, &host, &password)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 修改服务 root 密码（Redis 为 requirepass）。
+#[tauri::command]
+async fn db_service_root_password(id: String, password: String) -> Result<(), String> {
+    db_service_mgr()
+        .set_root_password(&id, &password)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// ---- FTP 管理 ----
 #[tauri::command]
 fn ftp_list() -> Result<Vec<FtpProfile>, String> {
     FtpManager::new(&cfg().data_dir)
@@ -577,6 +758,77 @@ fn ftp_update(profile: FtpProfile) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+// ---- FTP 服务端管理 ----
+
+/// FTP 服务端管理器实例。
+fn ftpd_mgr() -> FtpdManager {
+    FtpdManager::new(cfg())
+}
+
+/// FTP 服务端状态（控制端口探测）。
+#[tauri::command]
+async fn ftp_server_status() -> bool {
+    ftpd_mgr().status().await
+}
+
+/// 启动 FTP 服务端，返回实际使用的后端描述。
+#[tauri::command]
+async fn ftp_server_start() -> Result<String, String> {
+    ftpd_mgr()
+        .start()
+        .await
+        .map(|s| s.to_string())
+        .map_err(|e| e.to_string())
+}
+
+/// 停止 FTP 服务端。
+#[tauri::command]
+async fn ftp_server_stop() -> Result<(), String> {
+    ftpd_mgr().stop().await.map_err(|e| e.to_string())
+}
+
+/// 读取 FTP 服务端配置。
+#[tauri::command]
+fn ftp_server_config() -> FtpdConfig {
+    ftpd_mgr().config()
+}
+
+/// 更新 FTP 服务端配置（运行中服务需重启后生效）。
+#[tauri::command]
+fn ftp_server_update_config(config: FtpdConfig) -> Result<(), String> {
+    ftpd_mgr().save_config(&config).map_err(|e| e.to_string())
+}
+
+/// 当前后端名称（内嵌 libunftp / Pure-FTPd）。
+#[tauri::command]
+fn ftp_server_backend() -> String {
+    ftpd_mgr().backend_name().to_string()
+}
+
+/// 列出 FTP 虚拟用户。
+#[tauri::command]
+fn ftp_user_list() -> Result<Vec<FtpUser>, String> {
+    ftpd_mgr().list_users().map_err(|e| e.to_string())
+}
+
+/// 新增 FTP 虚拟用户。
+#[tauri::command]
+async fn ftp_user_add(user: FtpUser) -> Result<(), String> {
+    ftpd_mgr().add_user(user).await.map_err(|e| e.to_string())
+}
+
+/// 更新 FTP 虚拟用户。
+#[tauri::command]
+async fn ftp_user_update(user: FtpUser) -> Result<(), String> {
+    ftpd_mgr().update_user(user).await.map_err(|e| e.to_string())
+}
+
+/// 删除 FTP 虚拟用户。
+#[tauri::command]
+async fn ftp_user_remove(id: String) -> Result<(), String> {
+    ftpd_mgr().remove_user(&id).await.map_err(|e| e.to_string())
+}
+
 // 给前端的简化结构（路径转字符串）。
 #[derive(serde::Serialize)]
 struct RuntimeInfo {
@@ -590,6 +842,14 @@ struct RuntimeInfo {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|_app| {
+            // 自启动标记为自启的服务（数据库 + FTP），失败仅记日志
+            let cfg = cfg();
+            tauri::async_runtime::spawn(async move {
+                runphp_core::autostart_services(&cfg).await;
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             data_dir,
             runtime_list,
@@ -635,6 +895,26 @@ pub fn run() {
             db_libsql_tables,
             db_libsql_query_table,
             db_libsql_execute,
+            db_service_list,
+            db_service_detect,
+            db_service_register,
+            db_service_update,
+            db_service_remove,
+            db_service_start,
+            db_service_stop,
+            db_service_status,
+            db_service_log,
+            db_service_download_presets,
+            db_service_download,
+            db_service_register_connection,
+            db_service_databases,
+            db_service_database_create,
+            db_service_database_drop,
+            db_service_users,
+            db_service_user_create,
+            db_service_user_drop,
+            db_service_user_password,
+            db_service_root_password,
             ftp_list,
             ftp_add,
             ftp_remove,
@@ -647,6 +927,16 @@ pub fn run() {
             ftp_mkdir,
             ftp_rename,
             ftp_update,
+            ftp_server_status,
+            ftp_server_start,
+            ftp_server_stop,
+            ftp_server_config,
+            ftp_server_update_config,
+            ftp_server_backend,
+            ftp_user_list,
+            ftp_user_add,
+            ftp_user_update,
+            ftp_user_remove,
         ])
         .run(tauri::generate_context!())
         .expect("运行 Tauri 应用时出错");

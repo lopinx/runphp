@@ -7,7 +7,8 @@ mod panel;
 
 use clap::{Parser, Subcommand};
 use runphp_core::{
-    caddy, ftp::FtpProfile, AppConfig, RuntimeManager, Site,
+    caddy, db::service::DbServiceManager, ftp::FtpProfile, ftpd::{FtpdManager, FtpUser},
+    AppConfig, RuntimeManager, Site,
 };
 use std::path::PathBuf;
 
@@ -46,6 +47,16 @@ enum Command {
     Ftp {
         #[command(subcommand)]
         action: FtpCmd,
+    },
+    /// 数据库服务端管理（检测接管 / 便携托管）
+    DbService {
+        #[command(subcommand)]
+        action: DbServiceCmd,
+    },
+    /// FTP 服务端管理（虚拟用户 + Pure-FTPd/内嵌后端）
+    Ftpd {
+        #[command(subcommand)]
+        action: FtpdCmd,
     },
     /// 启动 FrankenPHP（前台运行）
     Run,
@@ -222,6 +233,58 @@ enum FtpCmd {
         #[arg(long)]
         to: String,
     },
+}
+
+#[derive(Subcommand)]
+enum DbServiceCmd {
+    /// 列出受管数据库服务
+    List,
+    /// 检测本机数据库服务候选
+    Detect,
+    /// 启动服务
+    Start { id: String },
+    /// 停止服务
+    Stop { id: String },
+    /// 列出服务中的用户数据库
+    Dbs { id: String },
+    /// 在服务中创建数据库
+    CreateDb { id: String, name: String },
+    /// 创建账号（可选同时授权某数据库全部权限）
+    CreateUser {
+        id: String,
+        username: String,
+        password: String,
+        /// 授权的数据库名
+        #[arg(long)]
+        database: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum FtpdCmd {
+    /// 显示 FTP 服务端状态与后端
+    Status,
+    /// 启动 FTP 服务端（守护方式：内嵌后端自派生分离进程）
+    Start,
+    /// 前台运行 FTP 服务端（随本进程存活，Ctrl+C 停止）
+    Run,
+    /// 停止 FTP 服务端
+    Stop,
+    /// 列出虚拟用户
+    UserList,
+    /// 新增虚拟用户
+    UserAdd {
+        username: String,
+        password: String,
+        /// 自定义根目录（默认 数据目录/ftp/<用户名>）
+        #[arg(long)]
+        home: Option<String>,
+        /// 关联站点 id
+        #[arg(long)]
+        site: Option<String>,
+    },
+    /// 删除虚拟用户
+    UserRm { id: String },
 }
 
 /// 按档案 id 查找 profile，不存在则报错退出。
@@ -455,6 +518,156 @@ async fn main() {
                 HostsCmd::Elevation => {
                     println!("提权命令（复制到管理员终端执行）：");
                     println!("{}", hm.elevation_command("sync"));
+                }
+            }
+        }
+        Command::DbService { action } => {
+            let mgr = DbServiceManager::new(cfg.clone());
+            match action {
+                DbServiceCmd::List => {
+                    match mgr.list() {
+                        Ok(list) if list.is_empty() => println!("尚无受管数据库服务。使用 `runphp db-service detect` 检测本机服务。"),
+                        Ok(list) => {
+                            for s in list {
+                                println!(
+                                    "{} [{}] {} 端口 {} ({})",
+                                    s.id,
+                                    s.kind.display_name(),
+                                    s.name,
+                                    s.port,
+                                    if s.source == runphp_core::services::ServiceSource::Portable {
+                                        "便携托管"
+                                    } else {
+                                        "接管"
+                                    }
+                                );
+                            }
+                        }
+                        Err(e) => { eprintln!("读取服务列表失败: {e}"); std::process::exit(1); }
+                    }
+                }
+                DbServiceCmd::Detect => {
+                    match mgr.detect().await {
+                        Ok(list) if list.is_empty() => println!("未检测到本机数据库服务。"),
+                        Ok(list) => {
+                            for c in list {
+                                println!(
+                                    "{} 端口 {} {}（系统服务: {}）",
+                                    c.name,
+                                    c.port,
+                                    if c.running { "运行中" } else { "未运行" },
+                                    c.os_service_name.as_deref().unwrap_or("—")
+                                );
+                            }
+                            println!("在 Web 面板或桌面端可一键接管上述服务。");
+                        }
+                        Err(e) => { eprintln!("检测失败: {e}"); std::process::exit(1); }
+                    }
+                }
+                DbServiceCmd::Start { id } => {
+                    if let Err(e) = mgr.start(&id).await {
+                        eprintln!("启动失败: {e}");
+                        std::process::exit(1);
+                    }
+                    println!("服务 {id} 已启动");
+                }
+                DbServiceCmd::Stop { id } => {
+                    if let Err(e) = mgr.stop(&id).await {
+                        eprintln!("停止失败: {e}");
+                        std::process::exit(1);
+                    }
+                    println!("服务 {id} 已停止");
+                }
+                DbServiceCmd::Dbs { id } => {
+                    match mgr.list_databases(&id).await {
+                        Ok(dbs) => {
+                            for d in dbs {
+                                println!("{d}");
+                            }
+                        }
+                        Err(e) => { eprintln!("查询失败: {e}"); std::process::exit(1); }
+                    }
+                }
+                DbServiceCmd::CreateDb { id, name } => {
+                    if let Err(e) = mgr.create_database(&id, &name).await {
+                        eprintln!("建库失败: {e}");
+                        std::process::exit(1);
+                    }
+                    println!("数据库 {name} 已创建");
+                }
+                DbServiceCmd::CreateUser { id, username, password, database } => {
+                    if let Err(e) = mgr.create_user(&id, &username, &password, database.as_deref()).await {
+                        eprintln!("创建账号失败: {e}");
+                        std::process::exit(1);
+                    }
+                    println!("账号 {username} 已创建");
+                }
+            }
+        }
+        Command::Ftpd { action } => {
+            let mgr = FtpdManager::new(cfg.clone());
+            match action {
+                FtpdCmd::Status => {
+                    let running = mgr.status().await;
+                    let config = mgr.config();
+                    println!(
+                        "FTP 服务端（后端 {}）：{}，控制端口 {}",
+                        mgr.backend_name(),
+                        if running { "运行中" } else { "已停止" },
+                        config.port
+                    );
+                }
+                FtpdCmd::Start => {
+                    match mgr.start_daemon().await {
+                        Ok(backend) => println!("FTP 服务端已启动（{backend}）"),
+                        Err(e) => { eprintln!("启动失败: {e}"); std::process::exit(1); }
+                    }
+                }
+                FtpdCmd::Run => {
+                    if let Err(e) = mgr.run_forever().await {
+                        eprintln!("运行失败: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                FtpdCmd::Stop => {
+                    if let Err(e) = mgr.stop().await {
+                        eprintln!("停止失败: {e}");
+                        std::process::exit(1);
+                    }
+                    println!("FTP 服务端已停止");
+                }
+                FtpdCmd::UserList => {
+                    match mgr.list_users() {
+                        Ok(users) if users.is_empty() => println!("尚无虚拟用户。"),
+                        Ok(users) => {
+                            for u in users {
+                                println!(
+                                    "{} {}（{}）",
+                                    u.id,
+                                    u.username,
+                                    if u.enabled { "启用" } else { "禁用" }
+                                );
+                            }
+                        }
+                        Err(e) => { eprintln!("读取用户失败: {e}"); std::process::exit(1); }
+                    }
+                }
+                FtpdCmd::UserAdd { username, password, home, site } => {
+                    let mut u = FtpUser::new(username, password);
+                    u.home_dir = home;
+                    u.linked_site = site;
+                    if let Err(e) = mgr.add_user(u).await {
+                        eprintln!("添加用户失败: {e}");
+                        std::process::exit(1);
+                    }
+                    println!("用户已添加");
+                }
+                FtpdCmd::UserRm { id } => {
+                    if let Err(e) = mgr.remove_user(&id).await {
+                        eprintln!("删除用户失败: {e}");
+                        std::process::exit(1);
+                    }
+                    println!("用户已删除");
                 }
             }
         }
