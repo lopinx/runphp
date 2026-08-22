@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { h, onMounted, ref } from "vue";
 import { useAppStore } from "../stores/app";
-import { NButton, NSelect, NTag, useMessage } from "naive-ui";
+import { NButton, NSelect, NTag, NTooltip, useMessage } from "naive-ui";
 import HostsCard from "../components/HostsCard.vue";
 import {
   runtimeSetDefault,
@@ -106,15 +106,12 @@ async function installForBinary(binary: DetectedBinary) {
   }
 }
 
-/** 归一化路径：统一小写、去除尾部分隔符，用于精确比较 */
-function normPath(p: string): string {
-  return p.replace(/[\\/]+$/g, "").toLowerCase();
-}
-
-/** 检查某个路径是否已导入（对应 store.runtimes 中的路径） */
+/** 检查某个检测到的二进制是否已导入（按导入时记录的来源路径精确匹配） */
 function isImported(binaryPath: string): boolean {
-  const target = normPath(binaryPath);
-  return store.runtimes.some((r) => normPath(r.path) === target);
+  const target = binaryPath.toLowerCase();
+  return store.runtimes.some(
+    (r) => r.imported_from?.toLowerCase() === target,
+  );
 }
 </script>
 
@@ -252,7 +249,22 @@ function isImported(binaryPath: string): boolean {
         <n-data-table
           :columns="[
             { title: '版本', key: 'version' },
-            { title: '路径', key: 'path', ellipsis: { tooltip: true } },
+            {
+              title: '路径',
+              key: 'path',
+              ellipsis: { tooltip: false },
+              render: (row: RuntimeInfo) =>
+                row.imported_from
+                  ? h(
+                      NTooltip,
+                      { trigger: 'hover' },
+                      {
+                        trigger: () => h('span', { style: 'cursor: help' }, row.imported_from ?? ''),
+                        default: () => `托管副本：${row.path}`,
+                      },
+                    )
+                  : row.path,
+            },
             {
               title: '默认',
               key: 'is_default',
