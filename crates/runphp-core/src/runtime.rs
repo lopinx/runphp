@@ -8,6 +8,9 @@
 use crate::{config::AppConfig, Error, Result};
 use std::path::{Path, PathBuf};
 
+/// 导入元数据文件名（记录导入运行时的来源路径）。
+const IMPORT_META_FILE: &str = "import_meta.json";
+
 /// 已安装的本地运行时。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct InstalledRuntime {
@@ -17,6 +20,8 @@ pub struct InstalledRuntime {
     pub path: PathBuf,
     /// 是否当前默认。
     pub is_default: bool,
+    /// 导入来源路径（下载安装的运行时为 `None`）。
+    pub imported_from: Option<PathBuf>,
 }
 
 /// 本地运行时导入结果。
@@ -84,6 +89,7 @@ impl RuntimeManager {
                         version: name.clone(),
                         path: bin,
                         is_default: name == self.cfg.default_runtime_version,
+                        imported_from: self.read_import_meta(&name),
                     });
                 }
             }
@@ -119,6 +125,8 @@ impl RuntimeManager {
     /// 导入已有的本地 FrankenPHP 二进制到托管目录。
     ///
     /// 版本标签优先通过执行 `<binary> version` 解析；失败时回退为 `local`。
+    /// 当该版本号已被占用（已下载或自其它位置导入）时，以来源目录名作后缀
+    /// 生成独立版本号，确保每个本地二进制都能单独导入并切换默认。
     pub async fn import(&self, source: &Path) -> Result<ImportResult> {
         if !source.is_file() {
             return Err(Error::Runtime(format!(
@@ -126,26 +134,89 @@ impl RuntimeManager {
                 source.display()
             )));
         }
-        let label = detect_version_label(source)
+        // 规范化来源路径（剥离 Windows 的 \\?\ 前缀），保证与检测路径可比较
+        let source = normalize_source(source);
+        let label = detect_version_label(&source)
             .await
             .unwrap_or_else(|| "local".to_string());
-        let bin_path = self.binary_path(&label);
-        // 目标版本已存在（已下载或已导入）时直接复用，避免覆盖已有运行时
+        let version = self.find_import_slot(&label, &source);
+        let bin_path = self.binary_path(&version);
+        // 已从同一来源导入过该版本槽位，直接复用
         if bin_path.exists() {
             return Ok(ImportResult {
                 path: bin_path,
-                version: label,
+                version,
             });
         }
-        let dest_dir = self.version_dir(&label);
+        let dest_dir = self.version_dir(&version);
         std::fs::create_dir_all(&dest_dir)?;
-        std::fs::copy(source, &bin_path)?;
+        std::fs::copy(&source, &bin_path)?;
         set_executable(&bin_path)?;
-        tracing::info!("已导入本地运行时 {label}: {}", bin_path.display());
+        self.write_import_meta(&version, &source)?;
+        tracing::info!("已导入本地运行时 {version}: {}", bin_path.display());
         Ok(ImportResult {
             path: bin_path,
-            version: label,
+            version,
         })
+    }
+
+    /// 为来源二进制寻找导入槽位：返回已从同一来源导入的版本号，
+    /// 或生成一个不与现有运行时冲突的新版本号。
+    fn find_import_slot(&self, label: &str, source: &Path) -> String {
+        // 以来源目录名作后缀区分同版本号的不同二进制
+        let suffix = source
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|n| sanitize_version(&n.to_string_lossy()))
+            .filter(|s| !s.is_empty() && s != "unknown")
+            .unwrap_or_else(|| "import".to_string());
+
+        let mut candidates = vec![label.to_string(), format!("{label}-{suffix}")];
+        for i in 2..10 {
+            candidates.push(format!("{label}-{suffix}-{i}"));
+        }
+        for cand in candidates {
+            if !self.binary_path(&cand).exists() {
+                return cand;
+            }
+            // 槽位已被占用：若来自同一来源则复用
+            if self
+                .read_import_meta(&cand)
+                .map(|p| p == source)
+                .unwrap_or(false)
+            {
+                return cand;
+            }
+        }
+        // 极端兜底：附加时间戳
+        format!(
+            "{label}-{suffix}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0)
+        )
+    }
+
+    /// 导入元数据文件路径。
+    fn meta_path(&self, version: &str) -> PathBuf {
+        self.version_dir(version).join(IMPORT_META_FILE)
+    }
+
+    /// 读取导入来源路径元数据；下载的运行时返回 `None`。
+    fn read_import_meta(&self, version: &str) -> Option<PathBuf> {
+        let raw = std::fs::read_to_string(self.meta_path(version)).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        v.get("imported_from")
+            .and_then(|s| s.as_str())
+            .map(PathBuf::from)
+    }
+
+    /// 写入导入来源路径元数据。
+    fn write_import_meta(&self, version: &str, source: &Path) -> Result<()> {
+        let raw = serde_json::json!({ "imported_from": source.to_string_lossy() }).to_string();
+        std::fs::write(self.meta_path(version), raw)?;
+        Ok(())
     }
 
     /// 下载并安装指定版本。
@@ -226,6 +297,9 @@ impl RuntimeManager {
             ));
         }
 
+        // 下载安装的运行时没有导入来源，清理该目录可能残留的导入元数据
+        std::fs::remove_file(dest_dir.join(IMPORT_META_FILE)).ok();
+
         tracing::info!("运行时安装完成: {}", bin_path.display());
         Ok(bin_path.to_path_buf())
     }
@@ -284,6 +358,17 @@ fn extract_zip(zip_path: &Path, dest: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// 规范化导入来源路径：canonicalize 后剥离 Windows `\\?\` 前缀，
+/// 使其与检测返回的普通路径写法一致，便于前端比对。
+fn normalize_source(path: &Path) -> PathBuf {
+    let p = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let s = p.to_string_lossy();
+    match s.strip_prefix(r"\\?\") {
+        Some(stripped) => PathBuf::from(stripped),
+        None => p,
+    }
 }
 
 /// 设置文件可执行位（Linux/macOS）。
@@ -378,5 +463,82 @@ mod tests {
         };
         let mgr = RuntimeManager::new(cfg);
         assert!(mgr.resolve(None).is_err());
+    }
+
+    #[test]
+    fn 版本冲突时生成带后缀的导入槽位() {
+        let dir = std::env::temp_dir().join("runphp-rt-slot-test");
+        std::fs::remove_dir_all(&dir).ok();
+        let cfg = AppConfig {
+            data_dir: dir.clone(),
+            ..Default::default()
+        };
+        let mgr = RuntimeManager::new(cfg);
+        // 模拟已下载的 1.12.7（无导入元数据）
+        std::fs::create_dir_all(mgr.version_dir("1.12.7")).unwrap();
+        std::fs::write(mgr.binary_path("1.12.7"), b"x").unwrap();
+        let slot = mgr.find_import_slot("1.12.7", Path::new("D:/FrankenPHP/frankenphp.exe"));
+        assert_eq!(slot, "1.12.7-FrankenPHP");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn 同一来源复用已导入槽位() {
+        let dir = std::env::temp_dir().join("runphp-rt-reuse-test");
+        std::fs::remove_dir_all(&dir).ok();
+        let cfg = AppConfig {
+            data_dir: dir.clone(),
+            ..Default::default()
+        };
+        let mgr = RuntimeManager::new(cfg);
+        let src_dir = dir.join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        let source = src_dir.join("frankenphp.exe");
+        std::fs::write(&source, b"x").unwrap();
+
+        // 首次：版本号未被占用，直接取裸版本号
+        let slot1 = mgr.find_import_slot("1.12.7", &source);
+        assert_eq!(slot1, "1.12.7");
+        // 模拟导入完成：落地二进制 + 元数据
+        std::fs::create_dir_all(mgr.version_dir(&slot1)).unwrap();
+        std::fs::write(mgr.binary_path(&slot1), b"x").unwrap();
+        mgr.write_import_meta(&slot1, &source).unwrap();
+        // 再次导入同一来源：复用槽位
+        assert_eq!(mgr.find_import_slot("1.12.7", &source), slot1);
+        // 同版本号的另一来源：生成新槽位
+        let other_dir = dir.join("other");
+        std::fs::create_dir_all(&other_dir).unwrap();
+        let other = other_dir.join("frankenphp.exe");
+        std::fs::write(&other, b"x").unwrap();
+        assert_eq!(mgr.find_import_slot("1.12.7", &other), "1.12.7-other");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn 导入记录来源元数据() {
+        let dir = std::env::temp_dir().join("runphp-rt-import-meta-test");
+        std::fs::remove_dir_all(&dir).ok();
+        let src_dir = dir.join("portable");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        #[cfg(windows)]
+        let src_bin = src_dir.join("frankenphp.exe");
+        #[cfg(not(windows))]
+        let src_bin = src_dir.join("frankenphp");
+        std::fs::write(&src_bin, b"fake").unwrap();
+
+        let cfg = AppConfig {
+            data_dir: dir.join("data"),
+            ..Default::default()
+        };
+        let mgr = RuntimeManager::new(cfg);
+        let result = mgr.import(&src_bin).await.unwrap();
+        // 伪二进制解析不出版本 → 标签 local，首个空闲槽位即 "local"
+        assert_eq!(result.version, "local");
+        let listed = mgr.list_installed();
+        assert_eq!(listed.len(), 1);
+        let meta = listed[0].imported_from.clone().expect("应记录导入来源");
+        let meta_s = meta.to_string_lossy().to_lowercase();
+        assert!(meta_s.contains("portable"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

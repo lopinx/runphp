@@ -76,6 +76,8 @@ export interface RuntimeInfo {
   version: string;
   path: string;
   is_default: boolean;
+  /** 导入来源路径（下载安装的运行时为 null） */
+  imported_from: string | null;
 }
 
 // 本地环境检测结果

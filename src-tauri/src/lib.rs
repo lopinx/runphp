@@ -36,6 +36,7 @@ fn runtime_list() -> Vec<RuntimeInfo> {
             version: r.version,
             path: r.path.to_string_lossy().to_string(),
             is_default: r.is_default,
+            imported_from: r.imported_from.map(|p| p.to_string_lossy().to_string()),
         })
         .collect()
 }
@@ -582,6 +583,7 @@ struct RuntimeInfo {
     version: String,
     path: String,
     is_default: bool,
+    imported_from: Option<String>,
 }
 
 /// 库入口：由桌面二进制与移动端共用。
