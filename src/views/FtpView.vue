@@ -62,7 +62,7 @@ async function loadProfiles() {
 
 async function selectProfile(p: FtpProfile) {
   activeProfile.value = p;
-  currentPath.value = "/";
+  currentPath.value = rootOf(p);
   await loadDir();
 }
 
@@ -77,8 +77,15 @@ function blankProfile(protocol: FtpProtocol = "ftp"): FtpProfile {
     password: "",
     ssh_key: null,
     ssh_password: null,
+    root_dir: null,
     created_at: "",
   };
+}
+
+/** 取档案的限定根目录显示值（空值视为 "/"） */
+function rootOf(p: FtpProfile): string {
+  const r = (p.root_dir ?? "").trim();
+  return r === "" ? "/" : r;
 }
 
 // ---- 添加/编辑/测试/删除 ----
@@ -102,6 +109,14 @@ function openEdit(p: FtpProfile) {
 function onProtocolChange(v: FtpProtocol) {
   addForm.value.port = DEFAULT_PORTS[v];
 }
+
+/** 限定目录输入代理：空串视为 null（不限定） */
+const rootDirInput = computed({
+  get: () => addForm.value.root_dir ?? "",
+  set: (v: string) => {
+    addForm.value.root_dir = v.trim() === "" ? null : v.trim();
+  },
+});
 
 async function submitProfile() {
   const p = addForm.value;
@@ -184,21 +199,33 @@ function enterDir(name: string) {
   void loadDir();
 }
 
-/** 返回上级 */
+/** 返回上级，但不能越过限定根目录 */
 function goUp() {
+  const root = activeProfile.value ? rootOf(activeProfile.value) : "/";
   const parts = currentPath.value.split("/").filter(Boolean);
+  if (parts.length === 0) return;
   parts.pop();
-  currentPath.value = "/" + parts.join("/");
-  if (!currentPath.value.endsWith("/")) currentPath.value += "/";
+  let next = "/" + parts.join("/");
+  if (!next.endsWith("/")) next += "/";
+  // 不越过限定根
+  const rootNorm = root.endsWith("/") ? root : root + "/";
+  if (next.length < rootNorm.length) {
+    next = rootNorm;
+  }
+  currentPath.value = next;
   void loadDir();
 }
 
 /** 路径面包屑分段 */
 const breadcrumbs = computed(() => {
+  const root = activeProfile.value ? rootOf(activeProfile.value) : "/";
+  const rootParts = root.replace(/\/$/, "").split("/").filter(Boolean);
   const parts = currentPath.value.split("/").filter(Boolean);
-  return parts.map((name, i) => ({
+  // 去掉限定根目录前缀部分，面包屑只显示根以下的层级
+  const rel = parts.slice(rootParts.length);
+  return rel.map((name, i) => ({
     name,
-    path: "/" + parts.slice(0, i + 1).join("/"),
+    path: "/" + [...rootParts, ...rel.slice(0, i + 1)].join("/"),
   }));
 });
 
@@ -489,7 +516,9 @@ async function doDownload(remotePath: string, localPath: string) {
           <n-space align="center" :wrap="false">
             <n-button size="small" @click="goUp">↑ 上级</n-button>
             <n-breadcrumb>
-              <n-breadcrumb-item @click="jumpTo('/')">/</n-breadcrumb-item>
+              <n-breadcrumb-item @click="jumpTo(activeProfile ? rootOf(activeProfile) : '/')">{{
+                activeProfile ? rootOf(activeProfile) : "/"
+              }}</n-breadcrumb-item>
               <n-breadcrumb-item
                 v-for="crumb in breadcrumbs"
                 :key="crumb.path"
@@ -622,6 +651,12 @@ async function doDownload(remotePath: string, localPath: string) {
           <n-input
             v-model:value="addForm.ssh_key"
             placeholder="SSH 私钥路径（与密码二选一，可留空）"
+          />
+        </n-form-item>
+        <n-form-item label="限定目录">
+          <n-input
+            v-model:value="rootDirInput"
+            placeholder="留空不限定，如 /var/www 锁定此目录为根"
           />
         </n-form-item>
       </n-form>

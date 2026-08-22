@@ -293,6 +293,8 @@ export interface FtpProfile {
   password: string;
   ssh_key: string | null;
   ssh_password: string | null;
+  /** 限定作用范围目录（chroot 根），留空或 "/" 表示不限定 */
+  root_dir: string | null;
   created_at: string;
 }
 export interface FtpEntry {
