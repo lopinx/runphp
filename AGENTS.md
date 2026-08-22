@@ -15,23 +15,25 @@ crates/runphp-core/   核心业务库（无 UI 依赖，三端共用）
   src/runtime.rs      FrankenPHP 下载/多版本（GitHub Releases）
   src/site.rs         站点模型 + CRUD + 域名校验
   src/hosts.rs        hosts 受管区块读写 + 备份 + 提权
+  src/ftp.rs          FTP/FTPS/SFTP 连接管理（suppaftp + russh）+ 档案 CRUD + 上传/下载/目录递归
+  src/error.rs        统一错误类型（thiserror）
   src/db/sqlite.rs    rusqlite bundled 引擎 + 表结构浏览 + SQL 执行器
   src/db/remote.rs    mysql_async + tokio-postgres 连接管理 + 表浏览 + SQL 执行；MongoDB/Redis/Qdrant 仅连接测试
   src/db/tunnel.rs    SSH 隧道：通过 russh 端口转发安全连接远程数据库
   src/db/libsql.rs    libSQL 管理（本地文件/远程连接/嵌入式副本），复用 TableInfo/QueryResult
   src/adminer.rs      Adminer 单文件下载 + 管理页面 URL 生成
-  src/detect.rs       本地环境检测：PATH/子目录/当前目录扫描 FrankenPHP 二进制 + 数据库服务端口探测
+  src/detect.rs       本地环境检测：PATH 与常见安装位置扫描 FrankenPHP 二进制 + 数据库服务端口探测
   src/fs.rs           文件系统浏览：为 UI 目录选择器提供目录列举（盘符/子目录/上级导航）
   src/system.rs       主机系统信息：CPU 架构/内存/硬盘/系统版本（sysinfo）
 crates/runphp-cli/    无头二进制（clap CLI + axum 面板）
-  src/main.rs         子命令分发（runtime/site/hosts/run/stop/reload/status/logs/panel/service-install）
+  src/main.rs         子命令分发（runtime/site/hosts/ftp/run/stop/reload/status/logs/panel/service-install）
   src/panel.rs        axum Web 面板（rust_embed 嵌入 dist/，Bearer token 鉴权）
 src-tauri/            Tauri 2 桌面壳（薄封装 core，不含业务逻辑）
 src/                  Vue 3 前端（桌面与面板共用同一构建产物）
   api/index.ts        适配层：运行时检测 window.__TAURI_INTERNALS__ 自动切换 invoke/fetch
   stores/app.ts       Pinia 状态管理
-  views/              五个页面：仪表盘/站点/数据库/Hosts/设置
-  components/         共用组件：DirectoryPicker 目录选择器
+  views/              五个页面：仪表盘/站点/数据库/FTP/设置
+  components/         共用组件：DirectoryPicker 目录选择器、HostsCard Hosts 管理
 docs/                 中文文档（用户手册.md、架构设计.md）
 ```
 
@@ -46,7 +48,7 @@ npx vue-tsc --noEmit     # 仅类型检查
 
 # Rust
 cargo build --workspace           # 全量编译
-cargo test -p runphp-core         # 核心库单元测试（17 个）
+cargo test -p runphp-core         # 核心库单元测试（37 个）
 cargo build -p runphp-cli         # 编译 CLI（target/debug/runphp[.exe]）
 cargo check -p runphp-desktop     # 检查桌面端
 
@@ -63,7 +65,7 @@ npm run tauri dev        # 启动 Tauri 窗口 + Vite 热更新
 ## 架构边界与编辑规则
 
 1. **业务逻辑只在 `runphp-core`**：桌面端 `src-tauri/lib.rs` 和 CLI `main.rs`/`panel.rs` 只做薄封装，不要在壳层写业务逻辑。
-2. **前端一份代码两处运行**：`src/api/index.ts` 适配层按 `VITE_RUNPHP_MODE` 切换 invoke/fetch。新增 API 时在适配层加类型定义和函数，桌面端和面板端同时可用。
+2. **前端一份代码两处运行**：`src/api/index.ts` 适配层运行时检测 `window.__TAURI_INTERNALS__` 自动切换 invoke/fetch。新增 API 时在适配层加类型定义和函数，桌面端和面板端同时可用。
 3. **Tauri command 与 REST API 同名同参**：新增功能时在 `src-tauri/lib.rs` 加 `#[tauri::command]`，同时在 `panel.rs` 加对应 axum 路由，保持两端一致。
 4. **模块内 `Result` 别名**：`site.rs` 和 `hosts.rs` 内使用 `type Result<T> = crate::Result<T>;` 避免与 std::Result 冲突。
 5. **Naive UI 全量注册**：`main.ts` 必须用 `import naive from "naive-ui"` 默认导出，不要用 `create()`（会导致 CSS 不注入、UI 显示纯文本）。

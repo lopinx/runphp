@@ -34,11 +34,13 @@
 
 | 功能 | 说明 |
 |---|---|
-| 🚀 **运行时管理** | 首次启动自动从 GitHub Releases 下载 FrankenPHP 二进制，支持多版本并存 |
+| 🚀 **运行时管理** | 首次启动自动从 GitHub Releases 下载 FrankenPHP 二进制，支持多版本并存、本地已有二进制导入 |
 | 🌐 **站点管理** | 域名绑定 · 本地 HTTPS（Caddy 内置 CA 自动签发）· Worker 模式（Laravel / Symfony 常驻进程） |
 | 🔥 **热重载** | 站点变更后 `frankenphp reload` 热加载，不中断连接 |
-| 🗄️ **数据库管理** | 内置 SQLite 引擎（建库 / 查询 / SQL 编辑器）+ 连接管理已有 MySQL · MariaDB · PostgreSQL |
-| 📋 **Hosts 管理** | 受管区块读写 · 自动备份 · 无权限时生成提权命令 |
+| 🗄️ **数据库管理** | 内置 SQLite · libSQL（本地/远程/副本）· 连接管理 MySQL · MariaDB · PostgreSQL · MongoDB · Redis · Qdrant · SSH 隧道 |
+| 📁 **FTP 文件管理** | FTP / FTPS / SFTP 三协议 · 档案管理 · 上传/下载/目录递归 · 进度反馈 |
+| 🛠️ **Adminer** | 单文件下载 + 数据库管理页面 URL 生成 |
+| 📋 **Hosts 管理** | 受管区块读写 · 自动备份 · 无权限时生成提权命令（内嵌于设置页） |
 | 🖥️ **多平台** | Windows 桌面 · Linux 桌面（Tauri 2）· 无 UI 的 Linux 服务器（CLI + Web 面板）|
 | 🇨🇳 **全程中文** | 界面 · 注释 · 文档 · 提交信息均中文 |
 
@@ -115,6 +117,16 @@ cargo build -p runphp-cli --release
 | `runphp hosts list` | 列出受管 hosts 条目 |
 | `runphp hosts sync` | 同步站点域名到 hosts |
 | `runphp hosts elevation` | 显示提权命令 |
+| `runphp ftp list` | 列出 FTP 连接档案 |
+| `runphp ftp add <名称> --host <主机> --protocol <ftp/sftp/ftps>` | 添加 FTP 连接 |
+| `runphp ftp test <id>` | 测试连接 |
+| `runphp ftp ls <id> --path <路径>` | 列出远程目录 |
+| `runphp ftp upload <id> --local <本地> --remote <远程>` | 上传文件 |
+| `runphp ftp upload-dir <id> --local <目录> --remote <远程>` | 递归上传文件夹 |
+| `runphp ftp download <id> --remote <远程> --local <本地>` | 下载文件 |
+| `runphp ftp rmfile <id> --path <路径> [--dir]` | 删除文件或目录 |
+| `runphp ftp rename <id> --from <原路径> --to <新路径>` | 重命名 |
+| `runphp ftp mkdir <id> --path <路径>` | 创建目录 |
 | `runphp panel --port <端口>` | 启动 Web 管理面板 |
 | `runphp service-install` | 生成 systemd 服务单元 |
 
@@ -123,23 +135,32 @@ cargo build -p runphp-cli --release
 ```
 runphp/
 ├── crates/
-│   ├── runphp-core/              # 核心业务库（站点 / 运行时 / 数据库 / hosts）
+│   ├── runphp-core/              # 核心业务库（站点 / 运行时 / 数据库 / FTP / hosts）
 │   │   └── src/
 │   │       ├── caddy.rs          # Caddyfile 生成 + 进程启停 + 热重载
 │   │       ├── config.rs         # 配置持久化
 │   │       ├── runtime.rs        # FrankenPHP 下载 / 多版本
 │   │       ├── site.rs           # 站点模型与 CRUD
 │   │       ├── hosts.rs          # hosts 受管区块读写
+│   │       ├── ftp.rs            # FTP/FTPS/SFTP 连接管理 + 档案 CRUD
+│   │       ├── adminer.rs        # Adminer 单文件下载
+│   │       ├── detect.rs         # 本地环境检测
+│   │       ├── fs.rs             # 文件系统浏览
+│   │       ├── system.rs         # 主机系统信息
+│   │       ├── error.rs          # 统一错误类型
 │   │       └── db/               # 数据库管理
 │   │           ├── sqlite.rs     #   SQLite（rusqlite bundled）
-│   │           └── remote.rs     #   MySQL / PostgreSQL 连接管理
+│   │           ├── remote.rs     #   MySQL / PostgreSQL 连接管理
+│   │           ├── tunnel.rs     #   SSH 隧道端口转发
+│   │           └── libsql.rs     #   libSQL（本地/远程/副本）
 │   └── runphp-cli/               # 无头二进制（CLI + Web 面板）
 │       └── src/
 │           ├── main.rs           # clap 子命令分发
 │           └── panel.rs          # axum Web 面板（rust_embed 嵌入前端）
 ├── src-tauri/                    # Tauri 2 桌面壳（薄封装 core）
 ├── src/                          # Vue 3 前端（桌面与面板共用）
-│   ├── views/                    #   五个页面
+│   ├── views/                    #   五个页面：仪表盘/站点/数据库/FTP/设置
+│   ├── components/               #   共用组件：DirectoryPicker、HostsCard
 │   ├── api/                      #   适配层（invoke / fetch 双模式）
 │   └── stores/                   #   Pinia 状态管理
 └── docs/                         # 中文文档
