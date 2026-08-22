@@ -43,6 +43,10 @@ libsql = { version = "0.10.0-pre.4", default-features = false, features = ["core
 suppaftp = { version = "10", default-features = false, features = ["tokio", "tokio-rustls-ring"] }
 # SFTP 客户端（复用 russh 连接）
 russh-sftp = "2.4"
+# 内嵌 FTP 服务端（Windows 或未安装 Pure-FTPd 时使用）
+libunftp = "0.23"
+unftp-core = "0.1"
+unftp-sbe-fs = "0.4"
 
 # Unix 专用：进程信号（kill_process 的 SIGTERM）
 [target.'cfg(unix)'.dependencies]
