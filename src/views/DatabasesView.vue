@@ -2,6 +2,7 @@
 import { onMounted, ref, computed, h } from "vue";
 import { useMessage, useDialog, NButton, NTag } from "naive-ui";
 import { useRoute, useRouter } from "vue-router";
+import DbServicePanel from "../components/DbServicePanel.vue";
 import {
   dbSqliteList,
   dbSqliteCreate,
@@ -38,6 +39,15 @@ const message = useMessage();
 const dialog = useDialog();
 const route = useRoute();
 const router = useRouter();
+
+/** 页面主 Tab：服务端管理为默认，连接管理保留为二级入口 */
+const activeTab = ref("service");
+
+/** 子面板请求跳转连接页（服务已注册为连接档案） */
+function openConnectionTab() {
+  activeTab.value = "connection";
+  void refreshAll();
+}
 
 // ---- 统一选中模型 ----
 interface ActiveDb {
@@ -551,6 +561,8 @@ onMounted(async () => {
   await refreshAll();
   const q = route.query;
   if (q.add_db) {
+    // 连接档案预填入口：切到连接页再打开添加框
+    activeTab.value = "connection";
     const driver = String(q.add_db) as DbDriver;
     if (driver in DEFAULT_PORTS) {
       addType.value = driver;
@@ -568,7 +580,12 @@ onMounted(async () => {
 
 <template>
   <n-space vertical size="large">
-    <n-card title="数据库管理">
+    <n-tabs v-model:value="activeTab" type="line" animated>
+      <n-tab-pane name="service" tab="服务">
+        <DbServicePanel @open-connection="openConnectionTab" />
+      </n-tab-pane>
+      <n-tab-pane name="connection" tab="连接">
+        <n-card title="数据库连接">
       <!-- 顶部工具栏 -->
       <n-space align="center" style="margin-bottom: 12px">
         <n-button type="primary" @click="showAdd = true">+ 添加</n-button>
@@ -935,7 +952,9 @@ onMounted(async () => {
           </n-space>
         </template>
       </n-modal>
-    </n-card>
+        </n-card>
+      </n-tab-pane>
+    </n-tabs>
   </n-space>
 </template>
 

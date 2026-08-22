@@ -1,21 +1,37 @@
 <script setup lang="ts">
 import { h, onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
 import { useAppStore } from "../stores/app";
-import { NButton, NSelect, NTag, NTooltip, useMessage } from "naive-ui";
+import { NButton, NSelect, NSwitch, NTag, NTooltip, useMessage } from "naive-ui";
 import {
   runtimeSetDefault,
   runtimeVersions,
   runtimeDetectLocal,
   runtimeImportLocal,
   runtimeInstall,
+  dbServiceList,
+  dbServiceStatus,
+  dbServiceStart,
+  dbServiceStop,
+  dbServiceUpdate,
+  ftpServerBackend,
+  ftpServerConfig,
+  ftpServerStatus,
+  ftpServerStart,
+  ftpServerStop,
+  ftpServerUpdateConfig,
   type RuntimeInfo,
   type LocalDetection,
   type DetectedBinary,
   type DetectedService,
+  type ManagedService,
+  type ServiceStatus,
+  type FtpdConfig,
 } from "../api";
 
 const store = useAppStore();
 const message = useMessage();
+const router = useRouter();
 
 const availableVersions = ref<string[]>([]);
 const loadingVersions = ref(false);
@@ -32,7 +48,100 @@ onMounted(async () => {
   await store.refreshRuntimes();
   void loadVersions();
   void detectLocal();
+  void loadServiceCard();
 });
+
+// ---- 数据库 / FTP 服务简单配置（完整管理在对应页面） ----
+const dbServices = ref<ManagedService[]>([]);
+const dbStatuses = ref<Record<string, ServiceStatus>>({});
+const ftpRunning = ref(false);
+const ftpBackend = ref("");
+const ftpConfig = ref<FtpdConfig>({ port: 21, passive_from: 50000, passive_to: 50010, autostart: false });
+const serviceToggling = ref<string | null>(null);
+
+async function loadServiceCard() {
+  try {
+    dbServices.value = await dbServiceList();
+    const map: Record<string, ServiceStatus> = {};
+    await Promise.all(
+      dbServices.value.map(async (s) => {
+        try {
+          map[s.id] = await dbServiceStatus(s.id);
+        } catch {
+          map[s.id] = { running: false, pid: null };
+        }
+      }),
+    );
+    dbStatuses.value = map;
+  } catch {
+    dbServices.value = [];
+  }
+  try {
+    [ftpRunning.value, ftpBackend.value, ftpConfig.value] = await Promise.all([
+      ftpServerStatus(),
+      ftpServerBackend(),
+      ftpServerConfig(),
+    ]);
+  } catch {
+    // FTP 状态读取失败不阻断页面
+  }
+}
+
+async function toggleDbService(s: ManagedService) {
+  serviceToggling.value = s.id;
+  try {
+    if (dbStatuses.value[s.id]?.running) {
+      await dbServiceStop(s.id);
+      message.success(`${s.name} 已停止`);
+    } else {
+      message.info(`正在启动 ${s.name}…`);
+      await dbServiceStart(s.id);
+      message.success(`${s.name} 已启动`);
+    }
+  } catch (e) {
+    message.error(`${e}`);
+  } finally {
+    serviceToggling.value = null;
+    await loadServiceCard();
+  }
+}
+
+async function toggleDbAutostart(s: ManagedService, autostart: boolean) {
+  try {
+    await dbServiceUpdate({ ...s, autostart });
+    message.success(`${s.name} 自启已${autostart ? "开启" : "关闭"}`);
+    await loadServiceCard();
+  } catch (e) {
+    message.error(`${e}`);
+  }
+}
+
+async function toggleFtp() {
+  serviceToggling.value = "ftp";
+  try {
+    if (ftpRunning.value) {
+      await ftpServerStop();
+      message.success("FTP 服务已停止");
+    } else {
+      const backend = await ftpServerStart();
+      message.success(`FTP 服务已启动（${backend}）`);
+    }
+  } catch (e) {
+    message.error(`${e}`);
+  } finally {
+    serviceToggling.value = null;
+    await loadServiceCard();
+  }
+}
+
+async function saveFtpConfig() {
+  try {
+    await ftpServerUpdateConfig(ftpConfig.value);
+    message.success("FTP 配置已保存（运行中需重启生效）");
+  } catch (e) {
+    message.error(`${e}`);
+  }
+}
 
 async function setDefault(version: string) {
   try {
@@ -287,6 +396,133 @@ function isImported(binaryPath: string): boolean {
           :pagination="false"
         />
 
+      </n-space>
+    </n-card>
+
+    <!-- 数据库与 FTP 服务简单配置（完整管理在对应页面） -->
+    <n-card title="数据库与 FTP 服务">
+      <n-space vertical size="large">
+        <div>
+          <n-space align="center" justify="space-between" style="margin-bottom: 8px">
+            <n-text depth="2" style="font-size: 14px; font-weight: 600">
+              数据库服务
+            </n-text>
+            <n-button size="small" @click="router.push('/databases')">
+              前往数据库页管理
+            </n-button>
+          </n-space>
+          <n-data-table
+            :columns="[
+              { title: '名称', key: 'name' },
+              { title: '类型', key: 'kind', width: 110 },
+              { title: '端口', key: 'port', width: 80 },
+              {
+                title: '状态',
+                key: 'running',
+                width: 100,
+                render: (row: ManagedService) =>
+                  h(
+                    NTag,
+                    { type: dbStatuses[row.id]?.running ? 'success' : 'default', size: 'small' },
+                    () => (dbStatuses[row.id]?.running ? '运行中' : '已停止'),
+                  ),
+              },
+              {
+                title: '自启',
+                key: 'autostart',
+                width: 80,
+                render: (row: ManagedService) =>
+                  h(NSwitch, {
+                    size: 'small',
+                    value: row.autostart,
+                    onUpdateValue: (v: boolean) => toggleDbAutostart(row, v),
+                  } as Record<string, unknown>),
+              },
+              {
+                title: '操作',
+                key: 'actions',
+                width: 90,
+                render: (row: ManagedService) =>
+                  h(
+                    NButton,
+                    {
+                      size: 'small',
+                      type: dbStatuses[row.id]?.running ? 'default' : 'primary',
+                      loading: serviceToggling === row.id,
+                      onClick: () => toggleDbService(row),
+                    } as Record<string, unknown>,
+                    () => (dbStatuses[row.id]?.running ? '停止' : '启动'),
+                  ),
+              },
+            ]"
+            :data="dbServices"
+            :bordered="false"
+            :pagination="false"
+            size="small"
+          />
+          <n-text v-if="dbServices.length === 0" depth="3">
+            尚未注册数据库服务，可在数据库页检测接管或下载便携包
+          </n-text>
+        </div>
+
+        <div>
+          <n-space align="center" justify="space-between" style="margin-bottom: 8px">
+            <n-text depth="2" style="font-size: 14px; font-weight: 600">
+              FTP 服务
+            </n-text>
+            <n-button size="small" @click="router.push('/ftp')">
+              前往 FTP 页管理
+            </n-button>
+          </n-space>
+          <n-space align="center" :wrap="false" style="margin-bottom: 8px">
+            <n-tag :type="ftpRunning ? 'success' : 'default'" size="small">
+              {{ ftpRunning ? "运行中" : "已停止" }}
+            </n-tag>
+            <n-tag size="small" :bordered="false">后端：{{ ftpBackend }}</n-tag>
+            <n-button
+              size="small"
+              :type="ftpRunning ? 'default' : 'primary'"
+              :loading="serviceToggling === 'ftp'"
+              @click="toggleFtp"
+            >
+              {{ ftpRunning ? "停止" : "启动" }}
+            </n-button>
+          </n-space>
+          <n-form inline size="small" label-placement="left" :label-width="70">
+            <n-form-item label="控制端口">
+              <n-input-number
+                v-model:value="ftpConfig.port"
+                :min="1"
+                :max="65535"
+                size="small"
+                style="width: 110px"
+              />
+            </n-form-item>
+            <n-form-item label="被动区间">
+              <n-input-number
+                v-model:value="ftpConfig.passive_from"
+                :min="1024"
+                :max="65535"
+                size="small"
+                style="width: 110px"
+              />
+              <span style="padding: 0 4px">—</span>
+              <n-input-number
+                v-model:value="ftpConfig.passive_to"
+                :min="1024"
+                :max="65535"
+                size="small"
+                style="width: 110px"
+              />
+            </n-form-item>
+            <n-form-item label="随应用自启">
+              <n-switch v-model:value="ftpConfig.autostart" size="small" />
+            </n-form-item>
+            <n-form-item label=" ">
+              <n-button size="small" type="primary" @click="saveFtpConfig">保存</n-button>
+            </n-form-item>
+          </n-form>
+        </div>
       </n-space>
     </n-card>
   </n-space>

@@ -59,6 +59,10 @@ export interface WorkerConfig {
   num: number;
 }
 
+export interface SiteDbBinding {
+  service_id: string;
+  database: string;
+}
 export interface Site {
   id: string;
   name: string;
@@ -68,6 +72,8 @@ export interface Site {
   https: boolean;
   worker: WorkerConfig | null;
   php_ini: string[];
+  /** 关联的受管数据库（旧数据可能缺省） */
+  databases?: SiteDbBinding[];
   created_at: string;
   updated_at: string;
 }
@@ -240,6 +246,124 @@ export const dbLibsqlQueryTable = (
 export const dbLibsqlExecute = (profile: LibsqlProfile, sql: string) =>
   call<QueryResult>("db_libsql_execute", { profile, sql });
 
+// 数据库服务端管理（接管本机服务 / 便携托管）
+export type ServiceKind = "mysql" | "mariadb" | "postgresql" | "redis" | "ftp";
+export type ServiceSource = "takeover" | "portable";
+export interface ManagedService {
+  id: string;
+  kind: ServiceKind;
+  name: string;
+  source: ServiceSource;
+  binary_path: string | null;
+  port: number;
+  autostart: boolean;
+  root_username: string;
+  root_password: string;
+  os_service_name: string | null;
+  extra_args: string[];
+  created_at: string;
+}
+export interface ServiceInput {
+  kind: ServiceKind;
+  name: string;
+  port: number;
+  binary_path?: string | null;
+  os_service_name?: string | null;
+  root_username?: string;
+  root_password?: string;
+  autostart?: boolean;
+  extra_args?: string[];
+}
+export interface ServiceStatus {
+  running: boolean;
+  pid: number | null;
+}
+export interface DbServiceCandidate {
+  kind: ServiceKind;
+  name: string;
+  port: number;
+  running: boolean;
+  binary_path: string | null;
+  os_service_name: string | null;
+}
+export interface ServiceDbUser {
+  username: string;
+  host: string;
+}
+export interface DownloadPreset {
+  kind: ServiceKind;
+  label: string;
+  url: string;
+  size_hint: string;
+}
+
+export const dbServiceList = () => call<ManagedService[]>("db_service_list");
+export const dbServiceDetect = () =>
+  call<DbServiceCandidate[]>("db_service_detect");
+export const dbServiceRegister = (input: ServiceInput) =>
+  call<ManagedService>("db_service_register", { input });
+export const dbServiceUpdate = (service: ManagedService) =>
+  call<void>("db_service_update", { service });
+export const dbServiceRemove = (id: string) =>
+  call<void>("db_service_remove", { id });
+export const dbServiceStart = (id: string) =>
+  call<void>("db_service_start", { id });
+export const dbServiceStop = (id: string) => call<void>("db_service_stop", { id });
+export const dbServiceStatus = (id: string) =>
+  call<ServiceStatus>("db_service_status", { id });
+export const dbServiceLog = (id: string, lines?: number) =>
+  call<string>("db_service_log", { id, lines: lines ?? 100 });
+export const dbServiceDownloadPresets = () =>
+  call<DownloadPreset[]>("db_service_download_presets");
+export const dbServiceDownload = (kind: ServiceKind, name: string, url: string) =>
+  call<ManagedService>("db_service_download", { kind, name, url });
+export const dbServiceRegisterConnection = (id: string) =>
+  call<ConnectionProfile>("db_service_register_connection", { id });
+export const dbServiceDatabases = (id: string) =>
+  call<string[]>("db_service_databases", { id });
+export const dbServiceDatabaseCreate = (id: string, name: string) =>
+  call<void>("db_service_database_create", { id, name });
+export const dbServiceDatabaseDrop = (id: string, name: string) =>
+  call<void>("db_service_database_drop", { id, name });
+export const dbServiceUsers = (id: string) =>
+  call<ServiceDbUser[]>("db_service_users", { id });
+export const dbServiceUserCreate = (
+  id: string,
+  username: string,
+  password: string,
+  database?: string,
+) =>
+  call<void>("db_service_user_create", {
+    id,
+    username,
+    password,
+    database: database ?? null,
+  });
+export const dbServiceUserDrop = (id: string, username: string, host: string) =>
+  call<void>("db_service_user_drop", { id, username, host });
+export const dbServiceUserPassword = (
+  id: string,
+  username: string,
+  host: string,
+  password: string,
+) => call<void>("db_service_user_password", { id, username, host, password });
+export const dbServiceRootPassword = (id: string, password: string) =>
+  call<void>("db_service_root_password", { id, password });
+
+/** 监听数据库服务便携包下载进度（桌面端 Tauri 事件，面板端 no-op）。 */
+export async function onDbServiceDownloadProgress(
+  cb: (p: { transferred: number; total: number }) => void,
+): Promise<() => void> {
+  if (isDesktop) {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<[number, number]>("db-service-download-progress", (e) => {
+      const [transferred, total] = e.payload;
+      cb({ transferred, total });
+    });
+  }
+  return () => {};
+}
+
 // 本地环境检测（类型定义见上方 DetectedBinary / DetectedService / LocalDetection / ImportResult）
 export const runtimeDetectLocal = () =>
   call<LocalDetection>("runtime_detect_local");
@@ -358,3 +482,37 @@ export async function onFtpProgress(
   }
   return () => {};
 }
+
+// FTP 服务端管理（虚拟用户 + 双后端：内嵌 libunftp / Pure-FTPd）
+export interface FtpServerUser {
+  id: string;
+  username: string;
+  password: string;
+  /** 自定义根目录（null 表示默认 数据目录/ftp/<用户名>） */
+  home_dir: string | null;
+  /** 关联站点 id */
+  linked_site: string | null;
+  enabled: boolean;
+  created_at: string;
+}
+export interface FtpdConfig {
+  port: number;
+  passive_from: number;
+  passive_to: number;
+  autostart: boolean;
+}
+
+export const ftpServerStatus = () => call<boolean>("ftp_server_status");
+export const ftpServerStart = () => call<string>("ftp_server_start");
+export const ftpServerStop = () => call<void>("ftp_server_stop");
+export const ftpServerConfig = () => call<FtpdConfig>("ftp_server_config");
+export const ftpServerUpdateConfig = (config: FtpdConfig) =>
+  call<void>("ftp_server_update_config", { config });
+export const ftpServerBackend = () => call<string>("ftp_server_backend");
+export const ftpUserList = () => call<FtpServerUser[]>("ftp_user_list");
+export const ftpUserAdd = (user: FtpServerUser) =>
+  call<void>("ftp_user_add", { user });
+export const ftpUserUpdate = (user: FtpServerUser) =>
+  call<void>("ftp_user_update", { user });
+export const ftpUserRemove = (id: string) =>
+  call<void>("ftp_user_remove", { id });

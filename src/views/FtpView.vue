@@ -2,6 +2,7 @@
 import { onMounted, ref, computed, h, onUnmounted } from "vue";
 import { useMessage, useDialog, NButton } from "naive-ui";
 import DirectoryPicker from "../components/DirectoryPicker.vue";
+import FtpServerPanel from "../components/FtpServerPanel.vue";
 import {
   ftpList,
   ftpAdd,
@@ -23,6 +24,9 @@ import {
 
 const message = useMessage();
 const dialog = useDialog();
+
+/** 页面主 Tab：服务端管理为默认，远程文件客户端保留为二级入口 */
+const activeTab = ref("server");
 
 const profiles = ref<FtpProfile[]>([]);
 const activeProfile = ref<FtpProfile | null>(null);
@@ -471,7 +475,12 @@ async function doDownload(remotePath: string, localPath: string) {
 
 <template>
   <n-space vertical size="large">
-    <n-card title="FTP 文件管理">
+    <n-tabs v-model:value="activeTab" type="line" animated>
+      <n-tab-pane name="server" tab="服务端">
+        <FtpServerPanel />
+      </n-tab-pane>
+      <n-tab-pane name="client" tab="远程文件">
+        <n-card title="FTP 文件管理">
       <!-- 顶部工具栏 -->
       <n-space align="center" style="margin-bottom: 12px">
         <n-select
@@ -685,5 +694,7 @@ async function doDownload(remotePath: string, localPath: string) {
       :mode="pickerFileMode ? 'file' : 'dir'"
       @select="onPickLocal"
     />
+      </n-tab-pane>
+    </n-tabs>
   </n-space>
 </template>

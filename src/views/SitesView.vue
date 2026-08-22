@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref, computed, h } from "vue";
 import { useAppStore } from "../stores/app";
-import type { Site, WorkerConfig } from "../api";
+import type { Site, WorkerConfig, SiteDbBinding } from "../api";
+import { dbServiceList, dbServiceDatabases } from "../api";
 import { useMessage, useDialog, NButton } from "naive-ui";
 import DirectoryPicker from "../components/DirectoryPicker.vue";
 
@@ -24,6 +25,40 @@ const formHttps = ref(false);
 const formWorkerEnabled = ref(false);
 const formWorkerScript = ref("public/index.php");
 const formWorkerNum = ref(4);
+const formDatabases = ref<string[]>([]);
+
+// 受管数据库选项（服务 × 数据库）
+interface DbOption {
+  value: string;
+  label: string;
+  binding: SiteDbBinding;
+}
+const dbOptions = ref<DbOption[]>([]);
+const dbServiceNames = ref<Record<string, string>>({});
+
+/** 拉取受管数据库服务及其数据库清单，生成「服务名 / 库名」选项 */
+async function loadDbOptions() {
+  try {
+    const services = (await dbServiceList()).filter(
+      (s) => s.kind === "mysql" || s.kind === "mariadb" || s.kind === "postgresql",
+    );
+    for (const s of services) {
+      dbServiceNames.value[s.id] = s.name;
+    }
+    const lists = await Promise.all(
+      services.map(async (s) => ({ s, dbs: await dbServiceDatabases(s.id).catch(() => [] as string[]) })),
+    );
+    dbOptions.value = lists.flatMap(({ s, dbs }) =>
+      dbs.map((d) => ({
+        value: `${s.id}:${d}`,
+        label: `${s.name} / ${d}`,
+        binding: { service_id: s.id, database: d },
+      })),
+    );
+  } catch {
+    dbOptions.value = [];
+  }
+}
 
 const isEdit = computed(() => !!editing.value);
 
@@ -41,7 +76,9 @@ function openCreate() {
   formWorkerEnabled.value = false;
   formWorkerScript.value = "public/index.php";
   formWorkerNum.value = 4;
+  formDatabases.value = [];
   showEdit.value = true;
+  void loadDbOptions();
 }
 
 function openEdit(site: Site) {
@@ -54,7 +91,9 @@ function openEdit(site: Site) {
   formWorkerEnabled.value = !!site.worker;
   formWorkerScript.value = site.worker?.script ?? "public/index.php";
   formWorkerNum.value = site.worker?.num ?? 4;
+  formDatabases.value = (site.databases ?? []).map((b) => `${b.service_id}:${b.database}`);
   showEdit.value = true;
+  void loadDbOptions();
 }
 
 async function save() {
@@ -80,6 +119,12 @@ async function save() {
     ? { script: formWorkerScript.value, num: formWorkerNum.value }
     : null;
 
+  // 选项 value 反查绑定结构（服务 id + 库名）
+  const databases: SiteDbBinding[] = formDatabases.value
+    .map((v) => dbOptions.value.find((o) => o.value === v)?.binding)
+    .filter((b): b is SiteDbBinding => !!b);
+  // 编辑时保留已失效（服务被删）的历史绑定提示不了太多，直接以当前选择为准
+
   const site: Site = {
     id: editing.value?.id ?? crypto.randomUUID(),
     name: formName.value.trim(),
@@ -89,6 +134,7 @@ async function save() {
     https: formHttps.value,
     worker,
     php_ini: editing.value?.php_ini ?? [],
+    databases,
     created_at: editing.value?.created_at ?? new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
@@ -146,6 +192,16 @@ const columns = computed(() => [
     key: "worker",
     render: (row: Site) =>
       row.worker ? `${row.worker.script} ×${row.worker.num}` : "—",
+  },
+  {
+    title: "数据库",
+    key: "databases",
+    render: (row: Site) =>
+      row.databases?.length
+        ? row.databases
+            .map((b) => `${dbServiceNames.value[b.service_id] ?? b.service_id}/${b.database}`)
+            .join(", ")
+        : "—",
   },
   {
     title: "操作",
@@ -245,6 +301,18 @@ const columns = computed(() => [
             :max="64"
             style="width: 100%"
           />
+        </n-form-item>
+        <n-form-item label="关联数据库">
+          <n-select
+            v-model:value="formDatabases"
+            :options="dbOptions"
+            multiple
+            clearable
+            placeholder="选择受管数据库服务中的库（可选）"
+          />
+          <n-text depth="3" style="font-size: 12px; width: 100%">
+            选项来自「数据库 · 服务」页管理的服务，需服务已在运行
+          </n-text>
         </n-form-item>
       </n-form>
 
