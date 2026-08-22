@@ -362,7 +362,7 @@ async fn runtime_list(State(s): S) -> Json<Value> {
     let list: Vec<_> = mgr
         .list_installed()
         .into_iter()
-        .map(|r| json!({"version": r.version, "path": r.path.to_string_lossy(), "is_default": r.is_default}))
+        .map(|r| json!({"version": r.version, "path": r.path.to_string_lossy(), "is_default": r.is_default, "imported_from": r.imported_from.map(|p| p.to_string_lossy().to_string())}))
         .collect();
     Json(json!(list))
 }

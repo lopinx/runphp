@@ -105,10 +105,11 @@ async function installForBinary(binary: DetectedBinary) {
   }
 }
 
-/** 检查某个路径是否已导入（对应 store.runtimes 中的路径） */
+/** 检查某个检测到的二进制是否已导入（按导入时记录的来源路径精确匹配） */
 function isImported(binaryPath: string): boolean {
-  return store.runtimes.some((r) =>
-    r.path.toLowerCase().includes(binaryPath.toLowerCase()),
+  const target = binaryPath.toLowerCase();
+  return store.runtimes.some(
+    (r) => r.imported_from?.toLowerCase() === target,
   );
 }
 </script>
