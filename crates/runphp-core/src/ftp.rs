@@ -466,6 +466,83 @@ impl FtpManager {
         Ok(())
     }
 
+    /// `upload_with_client` 的引用版本，复用已有连接。
+    async fn upload_with_client_ref(
+        client: &mut FtpClient,
+        local_path: &str,
+        remote_path: &str,
+        file_name: &str,
+        total: u64,
+        progress: ProgressFn<'_>,
+    ) -> Result<(), Error> {
+        let mut transferred: u64 = 0;
+        match client {
+            FtpClient::Ftp(ftp) => {
+                ftp.transfer_type(FileType::Binary).await.map_err(ftp_err)?;
+                let mut stream = ftp.put_with_stream(remote_path).await.map_err(ftp_err)?;
+                let mut file = tokio::fs::File::open(local_path)
+                    .await
+                    .map_err(Error::Io)?;
+                let mut buf = [0u8; 8192];
+                loop {
+                    let n = file.read(&mut buf).await.map_err(Error::Io)?;
+                    if n == 0 {
+                        break;
+                    }
+                    stream.write_all(&buf[..n]).await.map_err(ftp_io_err)?;
+                    transferred += n as u64;
+                    if let Some(cb) = progress {
+                        cb(transferred, total, file_name);
+                    }
+                }
+                ftp.finalize_put_stream(stream).await.map_err(ftp_err)?;
+            }
+            FtpClient::Ftps(ftp) => {
+                ftp.transfer_type(FileType::Binary).await.map_err(ftp_err)?;
+                let mut stream = ftp.put_with_stream(remote_path).await.map_err(ftp_err)?;
+                let mut file = tokio::fs::File::open(local_path)
+                    .await
+                    .map_err(Error::Io)?;
+                let mut buf = [0u8; 8192];
+                loop {
+                    let n = file.read(&mut buf).await.map_err(Error::Io)?;
+                    if n == 0 {
+                        break;
+                    }
+                    stream.write_all(&buf[..n]).await.map_err(ftp_io_err)?;
+                    transferred += n as u64;
+                    if let Some(cb) = progress {
+                        cb(transferred, total, file_name);
+                    }
+                }
+                ftp.finalize_put_stream(stream).await.map_err(ftp_err)?;
+            }
+            FtpClient::Sftp(sftp) => {
+                let mut file = tokio::fs::File::open(local_path)
+                    .await
+                    .map_err(Error::Io)?;
+                let mut remote = sftp
+                    .create(remote_path)
+                    .await
+                    .map_err(sftp_err)?;
+                let mut buf = [0u8; 8192];
+                loop {
+                    let n = file.read(&mut buf).await.map_err(Error::Io)?;
+                    if n == 0 {
+                        break;
+                    }
+                    remote.write_all(&buf[..n]).await.map_err(sftp_err_io)?;
+                    transferred += n as u64;
+                    if let Some(cb) = progress {
+                        cb(transferred, total, file_name);
+                    }
+                }
+                remote.flush().await.map_err(sftp_err_io)?;
+            }
+        }
+        Ok(())
+    }
+
     /// 下载远程文件到本地。
     ///
     /// `progress` 回调在每块写入后被调用，参数为 (已传输字节, 总字节, 文件名)。
@@ -578,11 +655,20 @@ impl FtpManager {
         remote_dir: &str,
         progress: ProgressFn<'_>,
     ) -> Result<(), Error> {
-        // 确保远程目录存在（忽略已存在错误）；路径已由调用方 resolve，这里直接建
-        if let Ok(client) = Self::connect(profile).await {
-            let _ = Self::make_dir_with_client(client, remote_dir).await;
-        }
+        // 建立单连接复用于整个目录上传，避免每文件重新建连
+        let mut client = Self::connect(profile).await?;
+        // 确保远程根目录存在（忽略已存在错误）
+        let _ = Self::make_dir_with_client_ref(&mut client, remote_dir).await;
+        Self::upload_dir_with_client(profile, &mut client, local_dir, remote_dir, progress).await
+    }
 
+    async fn upload_dir_with_client(
+        profile: &FtpProfile,
+        client: &mut FtpClient,
+        local_dir: &std::path::Path,
+        remote_dir: &str,
+        progress: ProgressFn<'_>,
+    ) -> Result<(), Error> {
         let mut entries = tokio::fs::read_dir(local_dir)
             .await
             .map_err(Error::Io)?;
@@ -592,7 +678,8 @@ impl FtpManager {
             let remote_path = format!("{}/{}", remote_dir.trim_end_matches('/'), name);
             let file_type = entry.file_type().await.map_err(Error::Io)?;
             if file_type.is_dir() {
-                Box::pin(Self::upload_dir_inner(profile, &local_path, &remote_path, progress))
+                let _ = Self::make_dir_with_client_ref(client, &remote_path).await;
+                Box::pin(Self::upload_dir_with_client(profile, client, &local_path, &remote_path, progress))
                     .await?;
             } else if file_type.is_file() {
                 let file_name = std::path::Path::new(&local_path)
@@ -603,8 +690,7 @@ impl FtpManager {
                     .await
                     .map(|m| m.len())
                     .unwrap_or(0);
-                let client = Self::connect(profile).await?;
-                Self::upload_with_client(
+                Self::upload_with_client_ref(
                     client,
                     &local_path.to_string_lossy(),
                     &remote_path,
@@ -665,6 +751,22 @@ impl FtpManager {
                 ftp.mkdir(path).await.map_err(ftp_err)?;
             }
             FtpClient::Ftps(mut ftp) => {
+                ftp.mkdir(path).await.map_err(ftp_err)?;
+            }
+            FtpClient::Sftp(sftp) => {
+                sftp.create_dir(path).await.map_err(sftp_err)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `make_dir_with_client` 的引用版本，复用已有连接。
+    async fn make_dir_with_client_ref(client: &mut FtpClient, path: &str) -> Result<(), Error> {
+        match client {
+            FtpClient::Ftp(ftp) => {
+                ftp.mkdir(path).await.map_err(ftp_err)?;
+            }
+            FtpClient::Ftps(ftp) => {
                 ftp.mkdir(path).await.map_err(ftp_err)?;
             }
             FtpClient::Sftp(sftp) => {

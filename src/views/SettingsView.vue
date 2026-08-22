@@ -31,7 +31,7 @@ const binaryVersionMap = ref<Record<string, string | null>>({});
 
 onMounted(async () => {
   await store.refreshRuntimes();
-  void loadVersions();
+  await loadVersions();
   void detectLocal();
 });
 
@@ -106,11 +106,15 @@ async function installForBinary(binary: DetectedBinary) {
   }
 }
 
+/** 归一化路径：统一小写、去除尾部分隔符，用于精确比较 */
+function normPath(p: string): string {
+  return p.replace(/[\\/]+$/g, "").toLowerCase();
+}
+
 /** 检查某个路径是否已导入（对应 store.runtimes 中的路径） */
 function isImported(binaryPath: string): boolean {
-  return store.runtimes.some((r) =>
-    r.path.toLowerCase().includes(binaryPath.toLowerCase()),
-  );
+  const target = normPath(binaryPath);
+  return store.runtimes.some((r) => normPath(r.path) === target);
 }
 </script>
 

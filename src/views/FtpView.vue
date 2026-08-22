@@ -291,7 +291,7 @@ function promptRename(row: FtpEntry) {
     title: "重命名",
     content: () =>
       h("input", {
-        value: newName,
+        defaultValue: newName,
         onInput: (e: Event) => {
           newName = (e.target as HTMLInputElement).value;
         },
@@ -456,9 +456,9 @@ async function doDownload(remotePath: string, localPath: string) {
   await startProgressListen("download");
   try {
     const fileName = remotePath.split("/").pop() ?? "download.bin";
-    const localFile = localPath.endsWith("\\") || localPath.endsWith("/")
-      ? localPath + fileName
-      : localPath + "\\" + fileName;
+    // 跨平台路径拼接：统一去除尾部分隔符后用 / 或 \ 连接
+    const sep = localPath.includes("\\") && !localPath.includes("/") ? "\\" : "/";
+    const localFile = localPath.replace(/[\\/]+$/, "") + sep + fileName;
     await ftpDownload(activeProfile.value, remotePath, localFile);
     message.success("下载成功");
   } catch (e) {
